@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Track preview</title>
+  <style>
+    body { margin: 0; background: #0b0d12; color: #eee; font-family: system-ui, "Malgun Gothic", sans-serif; }
+    .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 10px; }
+    figure { margin: 0; background: #151922; border-radius: 10px; padding: 8px; }
+    canvas { width: 100%; display: block; border-radius: 6px; }
+    figcaption { padding-top: 6px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="grid" id="grid"></div>
+  <script type="module">
+    import { getTrack, trackList } from '/shared/tracks.js';
+    import { drawTrackFit } from '/render.js';
+    const grid = document.getElementById('grid');
+    for (const info of trackList()) {
+      const t = getTrack(info.id);
+      const fig = document.createElement('figure');
+      const cv = document.createElement('canvas');
+      cv.width = 480; cv.height = 340;
+      drawTrackFit(cv.getContext('2d'), t, cv.width, cv.height, { full: true });
+      const cap = document.createElement('figcaption');
+      cap.textContent = `${info.name} (${info.en}) · 1랩 ${Math.round(t.L)}u`;
+      fig.append(cv, cap);
+      grid.append(fig);
+    }
+  </script>
+</body>
+</html>

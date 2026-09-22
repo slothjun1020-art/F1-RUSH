@@ -1,0 +1,14 @@
+# Render Blueprint. Render reads this file automatically when you create a service with
+# "New +" -> "Blueprint" and point it at this repo, and pre-fills the settings below.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: f1-race
+    runtime: node
+    plan: free
+    region: singapore          # closest of Render's free-tier regions to Korea; change if you'd rather
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz  # server/index.js already serves this; Render uses it to know the app is up
+    autoDeploy: true           # redeploy automatically whenever you push to `branch`

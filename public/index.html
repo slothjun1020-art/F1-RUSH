@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F1 Rush</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%81%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
+</head>
+<body>
+  <canvas id="game" hidden></canvas>
+  <canvas id="game3d" hidden></canvas>
+  <div id="labels" hidden></div>
+
+  <div id="hud" hidden>
+    <div class="hud-top">
+      <div class="stat"><small>랩</small><b id="hud-lap">LAP 1/5</b></div>
+      <div class="stat"><small>순위</small><b id="hud-pos">1/1</b></div>
+      <div class="stat"><small>시간</small><b id="hud-time">0:00.000</b></div>
+    </div>
+    <ol id="hud-board"></ol>
+    <div id="hud-center"></div>
+    <div class="hud-bottom">
+      <div id="hud-speed">0 km/h</div>
+      <div class="hud-buttons">
+        <button id="btn-reset" title="차를 트랙 위로 되돌려요 (R)">↺ 리셋 <kbd>R</kbd></button>
+        <button id="btn-quit" class="quit" title="레이스에서 나가기">✕ 나가기</button>
+      </div>
+      <div id="hud-help">↑ 가속 · ↓ 브레이크 · ←→ 조향 · R 리셋 · V 화면 전환</div>
+    </div>
+    <canvas id="minimap" width="220" height="160"></canvas>
+    <div id="debug-hud" hidden><span id="dbg-ping">ping --</span><span id="dbg-fps">-- FPS</span></div>
+  </div>
+
+  <section id="screen-start" class="screen">
+    <div class="card">
+      <h1>F1 <span>RUSH</span></h1>
+      <p class="sub">친구와 실시간 5바퀴 승부</p>
+      <label for="nick">닉네임</label>
+      <input id="nick" maxlength="12" placeholder="예: 번개맥스" autocomplete="off">
+      <button id="btn-create" class="primary">방 만들기</button>
+      <div class="or"><span>또는 코드로 입장</span></div>
+      <div class="row">
+        <input id="code" maxlength="4" placeholder="ABCD" autocomplete="off" spellcheck="false">
+        <button id="btn-join">입장</button>
+      </div>
+      <p id="start-error" class="error" role="alert"></p>
+    </div>
+  </section>
+
+  <section id="screen-lobby" class="screen" hidden>
+    <div class="lobby">
+      <header>
+        <div>
+          <small>방 코드</small>
+          <div id="lobby-code" class="code"></div>
+        </div>
+        <button id="btn-copy">초대 링크 복사</button>
+      </header>
+      <div class="cols">
+        <div class="col-players">
+          <h2>플레이어 <span id="pcount"></span></h2>
+          <ul id="plist"></ul>
+        </div>
+        <div class="col-tracks">
+          <h2>서킷 선택 <small id="track-hint"></small></h2>
+          <div id="tracks" class="tracks"></div>
+        </div>
+      </div>
+      <footer>
+        <button id="btn-ready">준비</button>
+        <button id="btn-start" class="primary">출발!</button>
+        <span id="lobby-hint"></span>
+      </footer>
+    </div>
+  </section>
+
+  <section id="screen-results" class="screen overlay" hidden>
+    <div class="card wide">
+      <h2>🏁 레이스 결과 <small id="res-track"></small></h2>
+      <table id="res-table">
+        <thead><tr><th>순위</th><th>드라이버</th><th>기록</th><th>베스트 랩</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row">
+        <button id="btn-back" class="primary">로비로 돌아가기</button>
+        <button id="btn-leave">나가기</button>
+      </div>
+      <p id="res-hint"></p>
+    </div>
+  </section>
+
+  <section id="confirm" class="screen overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
+    <div class="card">
+      <h2 id="confirm-title">정말 나갈까요?</h2>
+      <p class="sub">나가면 이번 기록이 사라져요</p>
+      <div class="row">
+        <button id="confirm-no" class="primary">계속하기</button>
+        <button id="confirm-yes">나가기</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" role="status"></div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
