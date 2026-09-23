@@ -14,8 +14,7 @@ import {
   remotePoseAt, createRemoteSmoother, smoothRemote,
 } from './interp.js';
 
-const SHIFT_BLOCK_MS = 900;     // how long the "can't downshift" warning stays up
-const SHIFT_LIGHT_RATIO = 0.92; // show the upshift cue once past this fraction of the gear's top speed
+const SHIFT_LIGHT_RATIO = 0.92; // "too fast for this gear" cue once past this fraction of its top speed
 
 const SEND_EVERY = 1000 / SEND_HZ;   // ms between position reports to the server (see shared/protocol.js)
 const r1 = (n) => Math.round(n);     // world units are large enough that whole units are plenty precise
@@ -50,7 +49,6 @@ export class RaceView {
     this.gearMode = gearMode;
     this.collisions = collisions;
     this.gear = 1;
-    this.shiftBlockedUntil = 0;
 
     const g = grid.find((x) => x.id === meId) ?? grid[0];
     this.car = createCar(g.x, g.y, g.a, track);
@@ -176,14 +174,11 @@ export class RaceView {
 
     // Not gated on `started`: picking a gear during the countdown (like selecting 1st before lights out)
     // is harmless since the car isn't moving yet, and it means a shift pressed a moment early isn't lost.
+    // Shifting itself is never refused — any gear at any speed — only the physics (stepCar's lugging and
+    // engine-braking) makes a mismatched gear cost you something.
     if (this.gearMode && !this.finished) {
       if (shift.up && this.gear < 8) this.gear++;
-      if (shift.down && this.gear > 1) {
-        // A real semi-automatic sequential refuses a downshift that would over-rev the lower gear.
-        const targetCap = GEAR_SPEEDS[this.gear - 2];
-        if (car.v > targetCap) this.shiftBlockedUntil = sn + SHIFT_BLOCK_MS;
-        else this.gear--;
-      }
+      if (shift.down && this.gear > 1) this.gear--;
     }
 
     if (started) {
@@ -318,11 +313,11 @@ export class RaceView {
 
     if (this.gearMode && hud.gear) {
       this.setText('gear', hud.gear.num, String(this.gear));
-      const nearRedline = this.gear < 8 && this.car.v > GEAR_SPEEDS[this.gear - 1] * SHIFT_LIGHT_RATIO;
-      const shiftCls = nearRedline ? 'shift' : '';
-      if (this.text.gearCls !== shiftCls) { this.text.gearCls = shiftCls; hud.gear.num.className = shiftCls; }
-      const blocked = sn < this.shiftBlockedUntil;
-      this.setText('gearWarn', hud.gear.warn, blocked ? '변속 불가!' : '');
+      // Never blocks anything — just tells the driver which way they're mismatched, if at all.
+      const tooFast = this.car.v > GEAR_SPEEDS[this.gear - 1] * SHIFT_LIGHT_RATIO;
+      const tooSlow = this.gear > 1 && this.car.v < GEAR_SPEEDS[this.gear - 2];
+      const gearCls = tooFast ? 'shift' : tooSlow ? 'lug' : '';
+      if (this.text.gearCls !== gearCls) { this.text.gearCls = gearCls; hud.gear.num.className = gearCls; }
     }
 
     const rows = this.ranking();

@@ -18,7 +18,7 @@ const hud = {
   lap: $('hud-lap'), pos: $('hud-pos'), time: $('hud-time'), speed: $('hud-speed'),
   board: $('hud-board'), center: $('hud-center'), minimap: $('minimap'),
   dbg: { ping: $('dbg-ping'), fps: $('dbg-fps') },
-  gear: { root: $('hud-gear'), num: $('hud-gear-num'), warn: $('hud-gear-warn') },
+  gear: { root: $('hud-gear'), num: $('hud-gear-num') },
 };
 
 // Small corner overlay of ping and frame rate, only with ?debug=1 in the address (the separate ?debug
