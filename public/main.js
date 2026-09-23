@@ -18,6 +18,7 @@ const hud = {
   lap: $('hud-lap'), pos: $('hud-pos'), time: $('hud-time'), speed: $('hud-speed'),
   board: $('hud-board'), center: $('hud-center'), minimap: $('minimap'),
   dbg: { ping: $('dbg-ping'), fps: $('dbg-fps') },
+  gear: { root: $('hud-gear'), num: $('hud-gear-num'), warn: $('hud-gear-warn') },
 };
 
 // Small corner overlay of ping and frame rate, only with ?debug=1 in the address (the separate ?debug
@@ -31,8 +32,10 @@ let room = null;
 let race = null;
 let toastTimer = 0;
 let confirmOpen = false;   // the "really leave?" dialog; driving keys are ignored while it is up
+let gearInfoOpen = false;  // the gear-mode controls dialog; same treatment
+let gearInfoShownFor = null; // room code the gear-mode dialog has already been shown in
 
-attachInput(() => race !== null && !confirmOpen);
+attachInput(() => race !== null && !confirmOpen && !gearInfoOpen);
 // Automated browser tests read the live race through this hook (opt-in via ?debug).
 if (new URLSearchParams(location.search).has('debug')) {
   window.__f1 = { get race() { return race; } };
@@ -116,9 +119,30 @@ async function toggleView() {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyV' && !e.repeat && race && !confirmOpen) toggleView();
+  if (e.code === 'KeyV' && !e.repeat && race && !confirmOpen && !gearInfoOpen) toggleView();
   if (e.key === 'Escape' && confirmOpen) closeConfirm();
+  if (e.key === 'Escape' && gearInfoOpen) closeGearInfo();
 });
+
+// The gear-mode controls dialog. Shown once per room (not once per race), the first time this client
+// sees gearMode on — whether that's because the host just turned it on, or because it was already on
+// when this player joined or started a race.
+function closeGearInfo() {
+  gearInfoOpen = false;
+  $('gear-info').hidden = true;
+  document.activeElement?.blur?.();
+}
+
+function maybeShowGearInfo() {
+  if (!room?.gearMode || gearInfoShownFor === room.code) return;
+  gearInfoShownFor = room.code;
+  gearInfoOpen = true;
+  clearInput();
+  $('gear-info').hidden = false;
+  $('gear-info-ok').focus();
+}
+
+$('gear-info-ok').onclick = closeGearInfo;
 
 // HUD buttons. They must never take keyboard focus, otherwise the Space bar (brake) would "click" them.
 for (const id of ['btn-reset', 'btn-quit']) {
@@ -161,11 +185,13 @@ function askToLeave() {
 
 function leaveToStart() {
   closeConfirm();
+  closeGearInfo();
   stopRace();
   net?.close();
   net = null;
   room = null;
   meId = null;
+  gearInfoShownFor = null;
   const url = new URL(location.href);
   url.searchParams.delete('room');
   history.replaceState(null, '', url);
@@ -272,15 +298,17 @@ async function onGo(m) {
   const renderer = await ensureRenderer();
   renderer.setTrack?.(track);
   show('race');
+  hud.gear.root.hidden = !m.gearMode;
   race = new RaceView({
     renderer, hud, net, track, laps: m.laps, startAt: m.startAt, grid: m.grid, meId, players: room.players,
-    debug: debugHud,
+    debug: debugHud, gearMode: m.gearMode, collisions: m.collisions,
     onLap: (n, ms, done) => {
       if (!done) toast(`LAP ${n} 완료  ${formatTime(ms)}`);
     },
     onReset: () => toast('트랙으로 복귀했어요', 1200),
   });
   race.start();
+  if (m.gearMode) maybeShowGearInfo();
 }
 
 // Someone left (or dropped). During a race they stay on the leaderboard as DNF; if they were the host, say who is now.
@@ -360,6 +388,14 @@ function renderLobby() {
   }
   $('track-hint').textContent = isHost ? '방장이 고를 수 있어요' : '방장이 선택해요';
 
+  for (const [key, id] of [['collisions', 'btn-collisions'], ['gearMode', 'btn-gearmode']]) {
+    const btn = $(id);
+    const on = !!room[key];
+    btn.classList.toggle('on', on);
+    btn.querySelector('.t-state').textContent = on ? '켜짐' : '꺼짐';
+    btn.disabled = !isHost || !inLobby;
+  }
+
   const me = room.players.find((p) => p.id === meId);
   const others = room.players.filter((p) => p.id !== room.hostId);
   const allReady = others.every((p) => p.ready);
@@ -380,6 +416,8 @@ $('btn-ready').onclick = () => {
   net?.send({ t: 'ready', ready: !me?.ready });
 };
 $('btn-start').onclick = () => net?.send({ t: 'start' });
+$('btn-collisions').onclick = () => net?.send({ t: 'collisions', on: !room?.collisions });
+$('btn-gearmode').onclick = () => net?.send({ t: 'gear', on: !room?.gearMode });
 $('btn-copy').onclick = async () => {
   const url = `${location.origin}/?room=${room.code}`;
   try {

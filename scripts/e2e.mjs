@@ -95,7 +95,10 @@ try {
       car.y = track.ys[car.seg] + Math.cos(a) * off;
       car.v = 300;
     });
-    await sleep(100);
+    // Poll rather than a fixed sleep: right after GO! there can be a short stall before the render loop's
+    // next tick actually re-locates the car at its new position (busy with the just-arrived 'go' message,
+    // camera transition, etc.), and a fixed wait was occasionally too short to outlast it.
+    await host.waitForFunction(() => window.__f1.race.car.dist > 100, { timeout: 3000 });
     const off = await carState(host);
     check(off.dist > 100, `(${way}) car was placed off the track (${off.dist.toFixed(0)} from the centerline)`);
     if (way === 'button') await host.click('#btn-reset');

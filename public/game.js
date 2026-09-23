@@ -2,17 +2,20 @@
 // The picture itself is drawn by a swappable renderer (view2d.js top-down, view3d.js chase camera);
 // physics, lap tracking and networking here don't depend on which one is active.
 
-import { createCar, stepCar } from '/shared/physics.js';
-import { SPEED_SCALE } from '/shared/scale.js';
+import { createCar, stepCar, GEAR_SPEEDS, worldToKmh } from '/shared/physics.js';
 import { advanceProgress, createProgress, lapsCompleted } from '/shared/race.js';
 import { locate, pointAt } from '/shared/track-geom.js';
 import { SEND_HZ } from '/shared/protocol.js';
-import { readInput, consumeReset } from './input.js';
+import { resolveCollisions } from '/shared/collision.js';
+import { readInput, consumeReset, consumeGearShift } from './input.js';
 import { drawTrackFit } from './render.js';
 import {
   createJitterTracker, recordArrival, stepJitterTracker,
   remotePoseAt, createRemoteSmoother, smoothRemote,
 } from './interp.js';
+
+const SHIFT_BLOCK_MS = 900;     // how long the "can't downshift" warning stays up
+const SHIFT_LIGHT_RATIO = 0.92; // show the upshift cue once past this fraction of the gear's top speed
 
 const SEND_EVERY = 1000 / SEND_HZ;   // ms between position reports to the server (see shared/protocol.js)
 const r1 = (n) => Math.round(n);     // world units are large enough that whole units are plenty precise
@@ -27,7 +30,10 @@ export function formatTime(ms) {
 }
 
 export class RaceView {
-  constructor({ renderer, hud, net, track, laps, startAt, grid, meId, players, onLap, onReset, debug = false }) {
+  constructor({
+    renderer, hud, net, track, laps, startAt, grid, meId, players, onLap, onReset,
+    gearMode = false, collisions = false, debug = false,
+  }) {
     this.renderer = renderer;
     this.hud = hud;
     this.debug = debug;
@@ -41,6 +47,10 @@ export class RaceView {
     this.players = new Map(players.map((p) => [p.id, p]));
     this.onLap = onLap;
     this.onReset = onReset;
+    this.gearMode = gearMode;
+    this.collisions = collisions;
+    this.gear = 1;
+    this.shiftBlockedUntil = 0;
 
     const g = grid.find((x) => x.id === meId) ?? grid[0];
     this.car = createCar(g.x, g.y, g.a, track);
@@ -154,6 +164,7 @@ export class RaceView {
     const started = sn >= this.startAt;
     const input = readInput(dt);
     const reset = consumeReset();
+    const shift = consumeGearShift();
     let drive = { throttle: 0, brake: 0, steer: 0 };
     if (started && !this.finished) {
       drive = input;
@@ -162,12 +173,39 @@ export class RaceView {
       // Roll to a stop past the line; braking below zero speed would reverse the car back over it.
       drive = { throttle: 0, brake: car.v > 5 ? 0.35 : 0, steer: 0 };
     }
+
+    // Not gated on `started`: picking a gear during the countdown (like selecting 1st before lights out)
+    // is harmless since the car isn't moving yet, and it means a shift pressed a moment early isn't lost.
+    if (this.gearMode && !this.finished) {
+      if (shift.up && this.gear < 8) this.gear++;
+      if (shift.down && this.gear > 1) {
+        // A real semi-automatic sequential refuses a downshift that would over-rev the lower gear.
+        const targetCap = GEAR_SPEEDS[this.gear - 2];
+        if (car.v > targetCap) this.shiftBlockedUntil = sn + SHIFT_BLOCK_MS;
+        else this.gear--;
+      }
+    }
+
     if (started) {
+      const gear = this.gearMode ? this.gear : null;
       let rem = dt;
       while (rem > 1e-6) {
         const h = Math.min(rem, 1 / 60);
-        stepCar(car, drive, h, track);
+        stepCar(car, drive, h, track, gear);
         rem -= h;
+      }
+      if (this.collisions && !this.finished) {
+        const others = [];
+        for (const [id, r] of this.remotes) {
+          if (!this.players.has(id)) continue;
+          const pose = remotePoseAt(r.buf, sn); // current best guess, not the delayed render pose
+          if (pose) others.push(pose);
+        }
+        if (resolveCollisions(car, others, dt)) {
+          const loc = locate(track, car.x, car.y, car.seg, 14);
+          car.seg = loc.seg;
+          car.dist = loc.dist;
+        }
       }
       advanceProgress(track, this.prog, car.x, car.y);
     }
@@ -274,10 +312,18 @@ export class RaceView {
     const started = sn >= this.startAt;
     const lap = Math.min(this.laps, this.lapsDone + 1);
     this.setText('lap', hud.lap, `LAP ${this.finished ? this.laps : lap}/${this.laps}`);
-    // Divide by the speed scale so the readout stays in the familiar range (about 280 km/h at top speed).
-    this.setText('speed', hud.speed, `${Math.round((Math.abs(this.car.v) * 0.5) / SPEED_SCALE)} km/h`);
+    this.setText('speed', hud.speed, `${Math.round(worldToKmh(Math.abs(this.car.v)))} km/h`);
     const raceMs = started ? (this.finished ? this.finishMs : sn - this.startAt) : 0;
     this.setText('time', hud.time, formatTime(Math.max(0, raceMs)));
+
+    if (this.gearMode && hud.gear) {
+      this.setText('gear', hud.gear.num, String(this.gear));
+      const nearRedline = this.gear < 8 && this.car.v > GEAR_SPEEDS[this.gear - 1] * SHIFT_LIGHT_RATIO;
+      const shiftCls = nearRedline ? 'shift' : '';
+      if (this.text.gearCls !== shiftCls) { this.text.gearCls = shiftCls; hud.gear.num.className = shiftCls; }
+      const blocked = sn < this.shiftBlockedUntil;
+      this.setText('gearWarn', hud.gear.warn, blocked ? '변속 불가!' : '');
+    }
 
     const rows = this.ranking();
     const myPos = rows.findIndex((r) => r.id === this.meId) + 1;

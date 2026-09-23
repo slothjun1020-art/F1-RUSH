@@ -22,7 +22,13 @@
     <ol id="hud-board"></ol>
     <div id="hud-center"></div>
     <div class="hud-bottom">
-      <div id="hud-speed">0 km/h</div>
+      <div class="hud-speed-row">
+        <div id="hud-speed">0 km/h</div>
+        <div id="hud-gear" hidden>
+          <b id="hud-gear-num">1</b>
+          <span id="hud-gear-warn"></span>
+        </div>
+      </div>
       <div class="hud-buttons">
         <button id="btn-reset" title="차를 트랙 위로 되돌려요 (R)">↺ 리셋 <kbd>R</kbd></button>
         <button id="btn-quit" class="quit" title="레이스에서 나가기">✕ 나가기</button>
@@ -66,6 +72,14 @@
         <div class="col-tracks">
           <h2>서킷 선택 <small id="track-hint"></small></h2>
           <div id="tracks" class="tracks"></div>
+          <div class="lobby-toggles">
+            <button id="btn-collisions" class="toggle" type="button">
+              <span class="t-label">🚗💥 차량 충돌</span><span class="t-state">꺼짐</span>
+            </button>
+            <button id="btn-gearmode" class="toggle" type="button">
+              <span class="t-label">🔧 기어 모드</span><span class="t-state">꺼짐</span>
+            </button>
+          </div>
         </div>
       </div>
       <footer>
@@ -88,6 +102,23 @@
         <button id="btn-leave">나가기</button>
       </div>
       <p id="res-hint"></p>
+    </div>
+  </section>
+
+  <section id="gear-info" class="screen overlay" role="dialog" aria-modal="true" aria-labelledby="gear-info-title" hidden>
+    <div class="card">
+      <h2 id="gear-info-title">🔧 기어 모드 조작법</h2>
+      <p class="sub">이 방은 8단 반자동 시퀀셜 기어가 켜져 있어요</p>
+      <ul class="gear-help">
+        <li><kbd>3</kbd> 기어 내리기 (다운시프트)</li>
+        <li><kbd>4</kbd> 기어 올리기 (업시프트)</li>
+        <li>속도가 낮은데 높은 기어면 가속이 약해져요</li>
+        <li>너무 빠른 상태로 다운시프트하면 막히고 경고가 떠요</li>
+        <li>기어 숫자가 붉게 표시되면 업시프트할 때예요</li>
+      </ul>
+      <div class="row">
+        <button id="gear-info-ok" class="primary">확인</button>
+      </div>
     </div>
   </section>
 

@@ -23,6 +23,8 @@ export class Room {
     this.players = new Map();
     this.hostId = null;
     this.trackId = 'monza';
+    this.collisions = false; // bumper-car style pushback between cars; off = the old ghost (pass-through) cars
+    this.gearMode = false;   // 8-speed semi-automatic sequential gearbox; off = today's automatic model
     this.phase = 'lobby'; // lobby | racing | results
     this.race = null;
     this.nextId = 1;
@@ -98,6 +100,20 @@ export class Room {
           this.broadcastRoom();
         }
         break;
+      case 'collisions':
+        if (id === this.hostId && this.phase === 'lobby') {
+          this.collisions = !!msg.on;
+          for (const q of this.players.values()) q.ready = false;
+          this.broadcastRoom();
+        }
+        break;
+      case 'gear':
+        if (id === this.hostId && this.phase === 'lobby') {
+          this.gearMode = !!msg.on;
+          for (const q of this.players.values()) q.ready = false;
+          this.broadcastRoom();
+        }
+        break;
       case 'ready':
         if (this.phase === 'lobby') {
           p.ready = !!msg.ready;
@@ -147,6 +163,7 @@ export class Room {
     this.race = { track, startAt, finishedCount: 0, firstFinishAt: null, grid, leavers: [] };
     this.broadcast({
       t: 'go', track: this.trackId, laps: this.laps, startAt, serverNow: this.now(), grid,
+      collisions: this.collisions, gearMode: this.gearMode,
     });
   }
 
@@ -268,6 +285,8 @@ export class Room {
       code: this.code,
       hostId: this.hostId,
       track: this.trackId,
+      collisions: this.collisions,
+      gearMode: this.gearMode,
       phase: this.phase,
       laps: this.laps,
       players: [...this.players.values()].map((p) => ({

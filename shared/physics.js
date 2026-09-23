@@ -8,10 +8,22 @@ import { SPEED_SCALE } from './scale.js';
 // bigger track does not make laps longer. The car's own size and its turn rate do not scale.
 const S = SPEED_SCALE;
 
+// One real km/h is this many world units/second at the current track scale. The HUD speed readout and
+// the gear table below both go through this, so a car's speed always reads correctly in km/h no matter
+// how big the track is (see shared/scale.js).
+export const WORLD_PER_KMH = 2 * S;
+export const kmhToWorld = (kmh) => kmh * WORLD_PER_KMH;
+export const worldToKmh = (v) => v / WORLD_PER_KMH;
+
+// The 8-speed sequential gearbox's top speed per gear, in km/h. The one place to change these — CAR.maxSpeed
+// below is derived from the top entry, so the overall top speed follows even with gear mode off.
+export const GEAR_SPEEDS_KMH = [20, 60, 100, 140, 180, 220, 260, 300];
+export const GEAR_SPEEDS = GEAR_SPEEDS_KMH.map(kmhToWorld);
+
 export const CAR = {
   length: 56,
   width: 26,
-  maxSpeed: 560 * S,     // on asphalt
+  maxSpeed: GEAR_SPEEDS[GEAR_SPEEDS.length - 1], // on asphalt; 300 km/h (see GEAR_SPEEDS_KMH above)
   offSpeed: 230 * S,     // cap when the car center is off the asphalt
   accel: 420 * S,
   offDrag: 460 * S,      // how fast a car that is too fast for the grass is slowed to offSpeed
@@ -39,14 +51,24 @@ export function createCar(x, y, a, track) {
 }
 
 // input: { throttle: 0..1, brake: 0..1, steer: -1..1 (negative = left) }
-export function stepCar(car, input, dt, track) {
+// gear: 1-8 when the room's gear mode is on, or null/undefined for the ungeared model (unchanged from
+// before gears existed). With a gear, that gear's own top speed becomes the local ceiling, and using a
+// gear too tall for the current speed ("lugging") weakens acceleration, same as a real sequential box.
+export function stepCar(car, input, dt, track, gear = null) {
+  const gearCap = gear ? GEAR_SPEEDS[gear - 1] : null;
+  const localMax = gearCap != null ? Math.min(gearCap, CAR.maxSpeed) : CAR.maxSpeed;
   const off = car.dist > track.halfW;
-  const vmax = off ? CAR.offSpeed : CAR.maxSpeed;
+  const vmax = off ? Math.min(CAR.offSpeed, localMax) : localMax;
   let v = car.v;
 
   if (input.throttle > 0) {
-    const ratio = Math.max(0, v) / CAR.maxSpeed;
-    v += CAR.accel * (1 - 0.75 * ratio * ratio) * input.throttle * dt;
+    const ratio = Math.max(0, v) / localMax;
+    let mul = 1 - 0.75 * ratio * ratio;
+    if (gearCap != null && gear > 1) {
+      const bandLow = GEAR_SPEEDS[gear - 2]; // the gear below's cap: the ideal minimum speed for this gear
+      if (v < bandLow) mul *= Math.max(0.35, v / bandLow); // lugging: weak accel well under the gear's band
+    }
+    v += CAR.accel * mul * input.throttle * dt;
   }
 
   if (input.brake > 0) {
@@ -71,9 +93,10 @@ export function stepCar(car, input, dt, track) {
   if (v > vmax) v = Math.max(vmax, v - (off ? CAR.offDrag : CAR.overDrag) * dt);
   if (v < -CAR.reverseMax) v = -CAR.reverseMax;
 
+  // Steering sensitivity tapers gradually as speed rises, down to 40% of the low-speed value at top speed.
   const speedRatio = Math.min(1, Math.abs(v) / CAR.maxSpeed);
   const grip = Math.min(1, Math.abs(v) / CAR.gripSpeed);
-  const turnRate = CAR.turn * (1 - 0.55 * speedRatio) * grip;
+  const turnRate = CAR.turn * (1 - 0.6 * speedRatio) * grip;
   car.a += input.steer * turnRate * dt * (v >= 0 ? 1 : -1);
   car.v = v;
   car.x += Math.cos(car.a) * v * dt;

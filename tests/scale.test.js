@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { SCALE, SPEED_SCALE, CAMERA_SCALE } from '../shared/scale.js';
 import { TRACKS, getTrack } from '../shared/tracks.js';
 import { SPACING, BARRIER, KERB_W } from '../shared/track-geom.js';
-import { CAR } from '../shared/physics.js';
+import {
+  CAR, GEAR_SPEEDS, GEAR_SPEEDS_KMH, kmhToWorld, worldToKmh,
+} from '../shared/physics.js';
 import { TERRAIN, WALL_H, buildTrees } from '../public/track3d.js';
 
 test('the cars keep their size; only the world is scaled', () => {
@@ -18,11 +20,20 @@ test('every derived value follows the multipliers in shared/scale.js', () => {
   assert.equal(SPACING, 24 * SCALE.length);
   assert.equal(BARRIER, 80 * SCALE.width);
   assert.equal(KERB_W, 13 * SCALE.width);
-  assert.equal(CAR.maxSpeed, 560 * SPEED_SCALE);
+  assert.equal(CAR.maxSpeed, kmhToWorld(300), 'top speed is derived from the gear table, not a fixed multiplier');
   assert.equal(CAR.accel, 420 * SPEED_SCALE);
   assert.equal(CAR.offSpeed, 230 * SPEED_SCALE);
   assert.equal(WALL_H, 18, 'guardrail height is about the cars, so it is not scaled');
   assert.ok(TERRAIN.margin > 3800 * CAMERA_SCALE, 'terrain reaches past the fog distance');
+});
+
+test('top speed reads as 300 km/h regardless of the track scale, and the gear table matches it', () => {
+  assert.equal(Math.round(worldToKmh(CAR.maxSpeed)), 300);
+  assert.equal(GEAR_SPEEDS_KMH.length, 8);
+  assert.deepEqual(GEAR_SPEEDS_KMH, [20, 60, 100, 140, 180, 220, 260, 300]);
+  assert.equal(GEAR_SPEEDS[7], CAR.maxSpeed, "top gear's cap is the car's overall top speed");
+  for (let i = 1; i < GEAR_SPEEDS.length; i++) assert.ok(GEAR_SPEEDS[i] > GEAR_SPEEDS[i - 1], 'each gear tops out faster than the last');
+  assert.equal(Math.round(worldToKmh(kmhToWorld(123))), 123, 'kmh <-> world conversion round-trips');
 });
 
 for (const def of TRACKS) {

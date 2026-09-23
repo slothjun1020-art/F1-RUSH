@@ -43,6 +43,42 @@ test('lobby: host picks a track, others must ready up before start', () => {
   assert.equal(go.laps, 5);
   assert.equal(go.grid.length, 2);
   assert.ok(go.startAt > go.serverNow);
+  assert.equal(go.collisions, false);
+  assert.equal(go.gearMode, false);
+});
+
+test('lobby: host toggles collisions and gear mode; both reset ready and reach room/go messages', () => {
+  const { room, join } = setup();
+  const a = join('Host');
+  const b = join('Guest');
+  assert.equal(room.collisions, false);
+  assert.equal(room.gearMode, false);
+  assert.equal(a.last('room').collisions, false);
+
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(b.id, { t: 'collisions', on: true }); // non-host ignored
+  assert.equal(room.collisions, false);
+  assert.equal(room.players.get(b.id).ready, true, 'ignored toggle does not reset ready');
+
+  room.handle(a.id, { t: 'collisions', on: true });
+  assert.equal(room.collisions, true);
+  assert.equal(a.last('room').collisions, true);
+  assert.equal(room.players.get(b.id).ready, false, 'toggling collisions resets ready, like changing track');
+
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(a.id, { t: 'gear', on: true });
+  assert.equal(room.gearMode, true);
+  assert.equal(a.last('room').gearMode, true);
+  assert.equal(room.players.get(b.id).ready, false, 'toggling gear mode also resets ready');
+
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(a.id, { t: 'start' });
+  const go = a.last('go');
+  assert.equal(go.collisions, true);
+  assert.equal(go.gearMode, true);
+
+  room.handle(a.id, { t: 'collisions', on: false }); // ignored once racing
+  assert.equal(room.collisions, true);
 });
 
 test('nicknames are sanitized and made unique; room caps at 8', () => {

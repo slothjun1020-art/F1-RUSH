@@ -6,10 +6,10 @@
 // and guardrails, top speed and acceleration, the grid, trees, hills, the start gantry, camera distance.
 
 export const SCALE = {
-  length: 2,     // lap length multiplier (1 = the original size)
-  width: 1.5,    // road width multiplier
-  // Fine tuning on top of the automatic speed scale (> 1 = faster cars = shorter laps). 0.72 keeps the
-  // bot's lap times at 19-38 s on the ten circuits, the same spread they had before the world was enlarged.
+  length: 2.4,   // lap length multiplier (1 = the original size)
+  width: 2.25,   // road width multiplier
+  // Fine tuning on top of the automatic speed scale (> 1 = faster cars = shorter laps). Retuned whenever
+  // length/width change so the bot's lap times stay in the 15-45 s band checked by tests/tracks.test.js.
   speedTrim: 0.72,
 };
 
