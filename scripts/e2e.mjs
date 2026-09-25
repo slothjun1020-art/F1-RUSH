@@ -1,6 +1,6 @@
 // End-to-end check in real (headless) Chrome: two players, lobby, a 1-lap race driven by the bot
-// through actual keyboard events, the 3D chase view, the 2D/3D switch, the reset button, the results
-// screen, and back to the lobby.
+// through actual keyboard events, the 3D chase view, the V-key camera cycle (chase/T-cam/helmet-cam),
+// the reset button, the results screen, and back to the lobby.
 // Usage: node scripts/e2e.mjs   (needs Google Chrome; set CHROME_PATH if it lives elsewhere)
 
 import fs from 'node:fs';
@@ -73,8 +73,9 @@ try {
 
   // ---- 3D chase view ----
   for (const [name, page] of [['host', host], ['guest', guest]]) {
-    check(await visible(page, '#game3d') && !(await visible(page, '#game')), `${name}: the 3D canvas is shown by default (2D canvas hidden)`);
+    check(await visible(page, '#game3d'), `${name}: the 3D canvas is shown by default`);
   }
+  check(await host.evaluate(() => window.__f1.race.renderer.camMode) === 'chase', 'default camera mode is chase');
   await guest.waitForFunction(() => document.querySelectorAll('#labels .nick3d').length === 2);
   const labels = await guest.$$eval('#labels .nick3d', (els) => els.map((e) => e.textContent).sort());
   check(labels.join() === 'Guesty,Hostie', `nicknames float above both cars (${labels.join(', ')})`);
@@ -110,16 +111,37 @@ try {
   }
   check(await host.evaluate(() => document.activeElement?.tagName !== 'BUTTON'), 'the reset button does not keep keyboard focus (Space still brakes)');
 
-  // ---- switch to the old 2D view and back ----
+  // ---- V cycles the camera: chase -> T-cam -> helmet-cam -> chase ----
+  // Only the host cycles; the guest stays in chase so we always have a second car's label as a control.
+  const camMode = (p) => p.evaluate(() => window.__f1.race.renderer.camMode);
+  const nick3dCount = (p) => p.$$eval('#labels .nick3d', (els) => els.filter((e) => e.style.display !== 'none').length);
+
   await host.keyboard.press('KeyV');
-  await host.waitForFunction(() => !document.getElementById('game').hidden);
-  check(!(await visible(host, '#game3d')) && !(await visible(host, '#labels')), 'V switches to the 2D view (3D canvas and labels hidden)');
+  await host.waitForFunction(() => window.__f1.race.renderer.camMode === 't');
+  check((await camMode(host)) === 't', 'V switches host to T-cam');
+  check(await visible(host, '#game3d'), 'T-cam still renders on the 3D canvas (no separate view to hide)');
+  check(await host.$eval('#hud', (el) => !el.hidden), 'HUD stays visible in T-cam');
+  check(await visible(host, '#minimap'), 'minimap stays visible in T-cam');
   await sleep(300);
-  await shot(host, '2d-view-host');
-  check(await host.$('#btn-view') === null, 'there is no on-screen 2D/3D button any more (only the V key)');
+  check(await nick3dCount(host) === 1, "host's own nickname label is hidden in T-cam, but the guest's is still shown");
+  await shot(host, '3d-tcam-host');
+
   await host.keyboard.press('KeyV');
-  await host.waitForFunction(() => !document.getElementById('game3d').hidden);
-  check(await visible(host, '#game3d') && !(await visible(host, '#game')), 'V switches back to 3D');
+  await host.waitForFunction(() => window.__f1.race.renderer.camMode === 'helmet');
+  check((await camMode(host)) === 'helmet', 'V switches host to helmet-cam');
+  check(await host.$eval('#hud', (el) => !el.hidden), 'HUD stays visible in helmet-cam');
+  check(await visible(host, '#minimap'), 'minimap stays visible in helmet-cam');
+  await sleep(300);
+  check(await nick3dCount(host) === 1, "host's own nickname label stays hidden in helmet-cam");
+  await shot(host, '3d-helmetcam-host');
+
+  await host.keyboard.press('KeyV');
+  await host.waitForFunction(() => window.__f1.race.renderer.camMode === 'chase');
+  check((await camMode(host)) === 'chase', 'V cycles back around to chase');
+  await sleep(300);
+  check(await nick3dCount(host) === 2, "host's own nickname label is shown again back in chase cam");
+
+  check(await host.$eval('#btn-reset', (el) => el.getBoundingClientRect().width > 0), 'reset button is still usable after cycling camera modes');
 
   // ---- full race, driven by the bot ----
   const resultsShown = (p) => async () => p.evaluate(() => !document.getElementById('screen-results').hidden);

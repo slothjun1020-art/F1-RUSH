@@ -9,7 +9,6 @@
   <script type="importmap">{ "imports": { "three": "/vendor/three/three.module.js" } }</script>
 </head>
 <body>
-  <canvas id="game" hidden></canvas>
   <canvas id="game3d" hidden></canvas>
   <div id="labels" hidden></div>
 
@@ -32,11 +31,19 @@
         <button id="btn-reset" title="차를 트랙 위로 되돌려요 (R)">↺ 리셋 <kbd>R</kbd></button>
         <button id="btn-quit" class="quit" title="레이스에서 나가기">✕ 나가기</button>
       </div>
-      <div id="hud-help">↑ 가속 · ↓ 브레이크 · ←→ 조향 · R 리셋 · V 화면 전환</div>
+      <div id="hud-help">↑ 가속 · ↓ 브레이크 · ←→ 조향 · R 리셋 · V 시점 전환</div>
     </div>
     <canvas id="minimap" width="220" height="160"></canvas>
     <div id="debug-hud" hidden><span id="dbg-ping">ping --</span><span id="dbg-fps">-- FPS</span></div>
   </div>
+
+  <section id="screen-nowebgl" class="screen" hidden>
+    <div class="card">
+      <h1>F1 <span>RUSH</span></h1>
+      <p class="sub">이 게임은 3D 그래픽을 지원하는 브라우저가 필요합니다</p>
+      <p class="sub">최신 Chrome, Edge, Firefox 등으로 다시 시도해 주세요.</p>
+    </div>
+  </section>
 
   <section id="screen-start" class="screen">
     <div class="card">

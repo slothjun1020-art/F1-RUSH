@@ -2,7 +2,7 @@
 // lobby toggles for collisions/gear mode (host-only, visible to everyone), the gear-mode controls
 // dialog (shown at race start, including to a player who joins the room later), free shifting with the
 // gear HUD's informational-only "too fast" / "too slow" cues and live engine braking, and cars pushing
-// each other apart when collisions are on. Runs in the 2D view for speed (?view=2d).
+// each other apart when collisions are on. Runs at the lowest 3D quality for speed (?q=3).
 // Usage: node scripts/e2e-features.mjs   (needs Google Chrome; set CHROME_PATH if it lives elsewhere)
 
 import { createGameServer } from '../server/index.js';
@@ -35,12 +35,12 @@ try {
   const host = await newPlayer('host');
   const guest = await newPlayer('guest');
 
-  await host.goto(`${base}/?view=2d&debug`);
+  await host.goto(`${base}/?q=3&debug`);
   await host.type('#nick', 'Hostie');
   await host.click('#btn-create');
   await host.waitForFunction(() => document.getElementById('lobby-code').textContent.length === 4);
   const code = await text(host, '#lobby-code');
-  await guest.goto(`${base}/?room=${code}&view=2d&debug`);
+  await guest.goto(`${base}/?room=${code}&q=3&debug`);
   await guest.type('#nick', 'Guesty');
   await guest.click('#btn-join');
   await lobbyPlayers(host, 2);
@@ -62,7 +62,7 @@ try {
 
   // ---- a third player joins the lobby *after* gear mode was already turned on ----
   const third = await newPlayer('third');
-  await third.goto(`${base}/?room=${code}&view=2d&debug`);
+  await third.goto(`${base}/?room=${code}&q=3&debug`);
   await third.type('#nick', 'Newbie');
   await third.click('#btn-join');
   await lobbyPlayers(host, 3);

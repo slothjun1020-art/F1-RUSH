@@ -17,9 +17,9 @@ const L = SCALE.length;
 
 export const WALL_H = 18;
 export const WALL_HALF_T = 3 * W;
-export const DASH_HALF = 1.5 * W;        // half width of the dashed center line
-export const START_HALF = 9 * W;         // half depth of the orange start band
-export const START_EDGE = [11 * W, 15 * W]; // the thin white lines either side of it
+const DASH_HALF = 1.5 * W;        // half width of the dashed center line
+const START_HALF = 9 * W;         // half depth of the orange start band
+const START_EDGE = [11 * W, 15 * W]; // the thin white lines either side of it
 
 // Heights of each layer. Separated by more than depth-buffer noise at long range.
 export const Y = {

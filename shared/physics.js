@@ -11,7 +11,7 @@ const S = SPEED_SCALE;
 // One real km/h is this many world units/second at the current track scale. The HUD speed readout and
 // the gear table below both go through this, so a car's speed always reads correctly in km/h no matter
 // how big the track is (see shared/scale.js).
-export const WORLD_PER_KMH = 2 * S;
+const WORLD_PER_KMH = 2 * S;
 export const kmhToWorld = (kmh) => kmh * WORLD_PER_KMH;
 export const worldToKmh = (v) => v / WORLD_PER_KMH;
 

@@ -40,10 +40,16 @@ export function createCarMesh(color) {
   add(box(18, 7, 8), body, -13, 13, 0);
   add(box(6, 9, 5), trim, -8, 15, 0);
 
-  // Driver: helmet and halo
-  add(geo('helmet', () => new THREE.SphereGeometry(4.2, 7, 5)), helmetMat, 2, 14, 0);
-  add(box(3, 4, 5.5), visorMat, 5.2, 14, 0);
-  add(box(1.4, 1.4, 10), darkMat, 4, 18.5, 0);
+  // Driver: helmet and halo. In helmet-cam the eye sits right where these are, so view3d.js hides them
+  // for your own car (a driver can't see their own helmet from inside it) — see userData.driverHead below.
+  const helmet = add(geo('helmet', () => new THREE.SphereGeometry(4.2, 7, 5)), helmetMat, 2, 14, 0);
+  const visor = add(box(3, 4, 5.5), visorMat, 5.2, 14, 0);
+  const rollbar = add(box(1.4, 1.4, 10), darkMat, 4, 18.5, 0);
+
+  // Cockpit rim and a hint of a steering wheel, just ahead of and below the helmet. Too small to read
+  // from chase/T-cam distance, but sits right at the bottom of the helmet-cam view (see view3d.js).
+  add(box(6, 1.6, 9), darkMat, 8, 12, 0);
+  add(geo('wheel', () => new THREE.TorusGeometry(2.6, 0.5, 5, 10)), darkMat, 6.5, 12.3, 0, { rx: Math.PI / 2, ry: 0.15 });
 
   // Front wing with end plates
   add(box(7, 1.6, 30), darkMat, 30, 3.2, 0);
@@ -72,6 +78,7 @@ export function createCarMesh(color) {
   add(box(2, 1.4, 12), darkMat, -18, 8, -8);
 
   car.userData.paint = [body, trim];
+  car.userData.driverHead = [helmet, visor, rollbar];
   return car;
 }
 

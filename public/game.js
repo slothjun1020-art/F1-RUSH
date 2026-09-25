@@ -1,6 +1,6 @@
 // Race controller: runs the local car, interpolates remote cars, and drives the HUD.
-// The picture itself is drawn by a swappable renderer (view2d.js top-down, view3d.js chase camera);
-// physics, lap tracking and networking here don't depend on which one is active.
+// The picture itself is drawn by the 3D renderer (view3d.js, which also owns the camera mode — chase,
+// T-cam or helmet-cam); physics, lap tracking and networking here don't depend on which camera is active.
 
 import { createCar, stepCar, GEAR_SPEEDS, worldToKmh } from '/shared/physics.js';
 import { advanceProgress, createProgress, lapsCompleted } from '/shared/race.js';
@@ -229,13 +229,6 @@ export class RaceView {
       this.lastSend = sn;
       this.net.send({ t: 's', x: r1(car.x), y: r1(car.y), a: Math.round(car.a * 100) / 100, v: 0, ts: Math.round(sn) });
     }
-  }
-
-  // Swap the picture (2D <-> 3D) mid-race. Nothing else about the race changes.
-  setRenderer(renderer) {
-    this.renderer = renderer;
-    if (renderer.track === this.track) renderer.snap?.();
-    else renderer.setTrack?.(this.track);
   }
 
   draw(dt, sn) {

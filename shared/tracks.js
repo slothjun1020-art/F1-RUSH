@@ -9,7 +9,7 @@ import { SCALE } from './scale.js';
 const KM = 1800 * SCALE.length;
 const WIDTH = 150 * SCALE.width;
 
-export const TRACK_DEFS = [
+const TRACK_DEFS = [
   {
     id: 'monaco', name: '모나코', en: 'Monaco', country: '모나코', km: 3.34, color: '#e10600',
     points: [

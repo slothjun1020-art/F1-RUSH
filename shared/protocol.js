@@ -2,7 +2,7 @@
 
 export const MAX_PLAYERS = 8;
 export const LAPS = 5;
-export const NICK_MAX = 12;
+const NICK_MAX = 12;
 export const COUNTDOWN_MS = 4000;
 // How often the server rebroadcasts every car's position to the room, and how often each client
 // reports its own car back to the server. Both were raised from the original 20 Hz because a

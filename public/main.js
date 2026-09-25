@@ -4,13 +4,13 @@ import { Net } from './net.js';
 import { RaceView, formatTime } from './game.js';
 import { attachInput, requestReset, clearInput } from './input.js';
 import { drawTrackFit } from './render.js';
-import { Renderer2D } from './view2d.js';
 import { getTrack, trackList } from '/shared/tracks.js';
 import { normalizeCode, sanitizeNick, MAX_PLAYERS } from '/shared/protocol.js';
 
 const $ = (id) => document.getElementById(id);
-const screens = { start: $('screen-start'), lobby: $('screen-lobby'), results: $('screen-results') };
-const canvas = $('game');
+const screens = {
+  start: $('screen-start'), lobby: $('screen-lobby'), results: $('screen-results'), nowebgl: $('screen-nowebgl'),
+};
 const canvas3d = $('game3d');
 const labelLayer = $('labels');
 const hudEl = $('hud');
@@ -57,72 +57,30 @@ function show(name) {
   for (const [key, el] of Object.entries(screens)) el.hidden = key !== name;
   raceVisible = name === 'race' || name === 'results';
   hudEl.hidden = !raceVisible;
-  syncCanvases();
+  canvas3d.hidden = !raceVisible;
+  labelLayer.hidden = !raceVisible;
   if (name === 'race') for (const el of Object.values(screens)) el.hidden = true;
 }
 
-// ---- 2D / 3D view -------------------------------------------------------
-// The race is drawn either by the original top-down renderer or by the 3D chase-camera one.
-// Default is 3D; `?view=2d` forces the old view, and the V key flips it live (there is no on-screen button).
+// ---- 3D renderer + camera mode -------------------------------------------
+// The game is 3D-only. One Renderer3D is created once, up front, and reused for every race. The camera
+// mode (chase/T-cam/helmet-cam, cycled with V) is each player's own choice, not a room setting — it lives
+// in localStorage, the same way the old 2D/3D preference used to. Building it needs an async import, so
+// the actual setup happens at the bottom of this file, after all the synchronous start-screen wiring
+// below — otherwise every click handler and the nickname auto-fill would sit behind that await and could
+// briefly miss a fast typist (see setupRenderer3d()).
 
-function initialView() {
-  const q = new URLSearchParams(location.search).get('view');
-  if (q === '2d' || q === '3d') return q;
+function initialCamMode() {
   try {
-    const saved = localStorage.getItem('f1rush.view');
-    if (saved === '2d' || saved === '3d') return saved;
+    const saved = localStorage.getItem('f1rush.camMode');
+    if (saved) return saved; // Renderer3D falls back to 'chase' for anything it doesn't recognise
   } catch { /* storage may be unavailable */ }
-  return '3d';
+  return 'chase';
 }
 
-let view = initialView();
-let renderer2d = null;
-let renderer3d = null;
-let webglFailed = false;
 const quality = Number(new URLSearchParams(location.search).get('q')) || 0;
-
-function syncCanvases() {
-  canvas.hidden = !(raceVisible && view === '2d');
-  canvas3d.hidden = !(raceVisible && view === '3d');
-  labelLayer.hidden = canvas3d.hidden;
-}
-
-// Load Three.js in the background so the first 3D race starts without a stall.
-if (view === '3d') import('./view3d.js').catch(() => {});
-
-async function ensureRenderer() {
-  if (view === '3d' && !renderer3d && !webglFailed) {
-    try {
-      const { Renderer3D } = await import('./view3d.js');
-      renderer3d = new Renderer3D({ canvas: canvas3d, labels: labelLayer, quality });
-    } catch (err) {
-      console.warn('3D view unavailable, using 2D:', err);
-      webglFailed = true;
-    }
-  }
-  if (view === '3d' && !renderer3d) {
-    view = '2d';
-    toast('이 브라우저에서는 3D 화면을 쓸 수 없어 2D 화면으로 전환했어요', 4000);
-  }
-  if (view === '2d' && !renderer2d) renderer2d = new Renderer2D(canvas);
-  return view === '3d' ? renderer3d : renderer2d;
-}
-
-async function toggleView() {
-  if (!race || webglFailed) return;
-  view = view === '3d' ? '2d' : '3d';
-  try { localStorage.setItem('f1rush.view', view); } catch { /* ignore */ }
-  const next = await ensureRenderer();
-  race?.setRenderer(next);
-  syncCanvases();
-  toast(view === '3d' ? '3D 화면' : '2D 화면', 1200);
-}
-
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyV' && !e.repeat && race && !confirmOpen && !gearInfoOpen) toggleView();
-  if (e.key === 'Escape' && confirmOpen) closeConfirm();
-  if (e.key === 'Escape' && gearInfoOpen) closeGearInfo();
-});
+let renderer3d = null;
+let CAM_LABELS = {};
 
 // The gear-mode controls dialog. Shown once per room (not once per race), the first time this client
 // sees gearMode on — whether that's because the host just turned it on, or because it was already on
@@ -292,15 +250,14 @@ function onRoom(m) {
   renderLobby();
 }
 
-async function onGo(m) {
+function onGo(m) {
   const track = getTrack(m.track);
   stopRace();
-  const renderer = await ensureRenderer();
-  renderer.setTrack?.(track);
+  renderer3d.setTrack(track);
   show('race');
   hud.gear.root.hidden = !m.gearMode;
   race = new RaceView({
-    renderer, hud, net, track, laps: m.laps, startAt: m.startAt, grid: m.grid, meId, players: room.players,
+    renderer: renderer3d, hud, net, track, laps: m.laps, startAt: m.startAt, grid: m.grid, meId, players: room.players,
     debug: debugHud, gearMode: m.gearMode, collisions: m.collisions,
     onLap: (n, ms, done) => {
       if (!done) toast(`LAP ${n} 완료  ${formatTime(ms)}`);
@@ -468,4 +425,36 @@ function updateResultsControls() {
 }
 
 $('btn-back').onclick = () => net?.send({ t: 'lobby' });
+
+// ---- 3D renderer setup (async; runs last, see the note above initialCamMode) ---------------------
+
+async function setupRenderer3d() {
+  try {
+    const { Renderer3D, CAM_LABELS: labels } = await import('./view3d.js');
+    renderer3d = new Renderer3D({ canvas: canvas3d, labels: labelLayer, quality, camMode: initialCamMode() });
+    CAM_LABELS = labels;
+  } catch (err) {
+    console.warn('3D unavailable:', err);
+  }
+
+  if (!renderer3d) {
+    show('nowebgl');
+    return;
+  }
+
+  function cycleCamera() {
+    if (!race) return;
+    const mode = renderer3d.cycleCameraMode();
+    try { localStorage.setItem('f1rush.camMode', mode); } catch { /* ignore */ }
+    toast(CAM_LABELS[mode] ?? mode, 1100);
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyV' && !e.repeat && race && !confirmOpen && !gearInfoOpen) cycleCamera();
+    if (e.key === 'Escape' && confirmOpen) closeConfirm();
+    if (e.key === 'Escape' && gearInfoOpen) closeGearInfo();
+  });
+}
+
+setupRenderer3d();
 $('btn-leave').onclick = leaveToStart;

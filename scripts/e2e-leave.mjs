@@ -1,7 +1,7 @@
 // End-to-end check of leaving a room in real (headless) Chrome:
 // the confirmation dialog, the host leaving during the countdown, DNF on the leaderboard, host hand-over,
 // the remaining player finishing alone with a normal results screen, rejoining, and leaving from the
-// results screen. Runs in the 2D view (?view=2d), which also covers that URL option.
+// results screen. Runs at the lowest 3D quality (?q=3) so software WebGL keeps up.
 // Usage: node scripts/e2e-leave.mjs   (needs Google Chrome; set CHROME_PATH if it lives elsewhere)
 
 import { createGameServer } from '../server/index.js';
@@ -33,12 +33,12 @@ try {
   const host = await newPlayer('host');
   const guest = await newPlayer('guest');
 
-  await host.goto(`${base}/?view=2d&debug`);
+  await host.goto(`${base}/?q=3&debug`);
   await host.type('#nick', 'Hostie');
   await host.click('#btn-create');
   await host.waitForFunction(() => document.getElementById('lobby-code').textContent.length === 4);
   const code = await text(host, '#lobby-code');
-  await guest.goto(`${base}/?room=${code}&view=2d&debug`);
+  await guest.goto(`${base}/?room=${code}&q=3&debug`);
   await guest.type('#nick', 'Guesty');
   await guest.click('#btn-join');
   await lobbyPlayers(host, 2);
@@ -49,8 +49,7 @@ try {
   await Promise.all([host, guest].map((p) => p.waitForFunction(() => !document.getElementById('hud').hidden)));
   await host.waitForFunction(() => ['READY', '3', '2', '1'].includes(document.getElementById('hud-center').textContent));
 
-  check(await visible(host, '#game') && !(await visible(host, '#game3d')), '?view=2d starts in the 2D view');
-  check(await host.$('#btn-view') === null, 'there is no 2D/3D button on screen');
+  check(await visible(host, '#game3d'), 'the 3D canvas is shown');
 
   // ---- the confirmation dialog (host, during the countdown) ----
   check(!(await visible(host, '#confirm')), 'no dialog before the button is used');

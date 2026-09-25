@@ -1,7 +1,7 @@
-// Canvas drawing: track, cars, minimap. Flat, slightly cartoonish, easy to read.
+// Canvas drawing shared by the minimap, the lobby's track-choice cards and /preview.html — the game
+// itself is 3D-only (public/view3d.js); this file just draws a flat outline of a track, not a race.
 
 import { BARRIER, KERB_W, SPACING } from '/shared/track-geom.js';
-import { CAR } from '/shared/physics.js';
 import { SCALE } from '/shared/scale.js';
 
 const K = SCALE.width; // road furniture (line widths, dash lengths, start-line squares) follows the road width
@@ -18,26 +18,6 @@ export function trackPath(track) {
     pathCache.set(track, p);
   }
   return p;
-}
-
-let grassPattern = null;
-export function grassFor(ctx) {
-  if (grassPattern) return grassPattern;
-  const c = document.createElement('canvas');
-  c.width = c.height = 128;
-  const g = c.getContext('2d');
-  g.fillStyle = '#2c6a3b';
-  g.fillRect(0, 0, 128, 128);
-  let seed = 7;
-  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-  for (let i = 0; i < 90; i++) {
-    g.fillStyle = rnd() > 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.07)';
-    g.beginPath();
-    g.arc(rnd() * 128, rnd() * 128, 2 + rnd() * 5, 0, Math.PI * 2);
-    g.fill();
-  }
-  grassPattern = ctx.createPattern(c, 'repeat');
-  return grassPattern;
 }
 
 // Wall, runoff, kerbs, asphalt, center line, start line. Coordinates are world units.
@@ -90,86 +70,6 @@ export function drawTrackLayers(ctx, track, { detail = true } = {}) {
     }
   }
   ctx.restore();
-}
-
-export function drawWorld(ctx, track, view) {
-  ctx.fillStyle = grassFor(ctx);
-  ctx.fillRect(view.x0, view.y0, view.x1 - view.x0, view.y1 - view.y0);
-  drawTrackLayers(ctx, track);
-}
-
-const shade = (hex, f) => {
-  const n = parseInt(hex.slice(1), 16);
-  const c = (v) => Math.max(0, Math.min(255, Math.round(v * f)));
-  return `rgb(${c(n >> 16)},${c((n >> 8) & 255)},${c(n & 255)})`;
-};
-
-// Top-down open-wheel car facing +x, roughly CAR.length long.
-export function drawCar(ctx, x, y, a, color) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(a);
-  const dark = '#16181c';
-
-  ctx.fillStyle = 'rgba(0,0,0,0.28)';
-  ctx.beginPath();
-  ctx.ellipse(2, 3, CAR.length * 0.5, CAR.width * 0.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Tyres
-  ctx.fillStyle = dark;
-  for (const s of [-1, 1]) {
-    ctx.fillRect(-23, s * 12 - 4.5, 17, 9);   // rear
-    ctx.fillRect(9, s * 11.5 - 4, 15, 8);     // front
-  }
-  // Rear wing and front wing
-  ctx.fillStyle = shade(color, 0.55);
-  ctx.fillRect(-29, -12, 7, 24);
-  ctx.fillStyle = '#f2f2f2';
-  ctx.fillRect(-27, -12, 2, 24);
-  ctx.fillStyle = shade(color, 0.55);
-  ctx.fillRect(22, -13, 7, 26);
-
-  // Body: nose, sidepods, engine cover
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(30, 0);
-  ctx.lineTo(22, -2.5);
-  ctx.lineTo(8, -5);
-  ctx.lineTo(2, -9);
-  ctx.lineTo(-10, -9);
-  ctx.lineTo(-20, -5);
-  ctx.lineTo(-25, -3);
-  ctx.lineTo(-25, 3);
-  ctx.lineTo(-20, 5);
-  ctx.lineTo(-10, 9);
-  ctx.lineTo(2, 9);
-  ctx.lineTo(8, 5);
-  ctx.lineTo(22, 2.5);
-  ctx.closePath();
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.fillRect(-22, -1.2, 26, 2.4);
-
-  // Driver helmet
-  ctx.fillStyle = '#f7f7f7';
-  ctx.beginPath();
-  ctx.arc(-2, 0, 4.2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = dark;
-  ctx.fillRect(-1, -3.2, 2.6, 6.4);
-  ctx.restore();
-}
-
-export function drawLabel(ctx, text, x, y, color, strong = false, size = 15) {
-  ctx.font = `${strong ? 'bold ' : ''}${size}px system-ui, "Malgun Gothic", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = size * 0.28;
-  ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-  ctx.strokeText(text, x, y);
-  ctx.fillStyle = strong ? '#ffffff' : color;
-  ctx.fillText(text, x, y);
 }
 
 // Fit the whole circuit into a w x h box. Returns the mapping so callers can plot cars on top.

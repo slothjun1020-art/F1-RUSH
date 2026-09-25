@@ -31,6 +31,24 @@ const CAM = {
 const FOG_NEAR = 1500 * CAMERA_SCALE;
 const FOG_FAR = 3800 * CAMERA_SCALE; // must stay below the terrain margin (see TERRAIN in track3d.js)
 
+// Cycled with V. Chase is the artistic TV follow-cam (distance/height/FOV all breathe with speed); T-cam
+// and helmet-cam are rigidly bolted to the car instead — no lag, no independent smoothing — so they turn
+// exactly with the chassis every frame, which is what keeps a mounted camera feeling natural in corners
+// without adding any shake. Positions are local to the car (+X forward, +Y up — see public/car3d.js) and
+// go through localToWorld() below; a fixed FOV (no chase-style speed zoom) matches a real mounted lens.
+export const CAM_MODES = ['chase', 't', 'helmet'];
+export const CAM_LABELS = { chase: '추격캠', t: 'T캠', helmet: '헬멧캠' };
+const TCAM = {
+  // On a short pylon above and just behind the driver's head, angled down — the nose and front wing sit
+  // in the lower-middle of frame and a wide lens brings the front suspension into view on both sides.
+  eye: [-4, 27, 0], look: [70, 4, 0], fov: 96,
+};
+const HELMET = {
+  // At roughly eye height, just behind the helmet so the camera isn't inside it. Aimed a little down the
+  // road rather than dead level, with the cockpit rim/wheel (public/car3d.js) grazing the bottom of frame.
+  eye: [-3, 17, 0], look: [60, 9, 0], fov: 86,
+};
+
 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -54,9 +72,10 @@ function mulberry32(seed) {
 }
 
 export class Renderer3D {
-  constructor({ canvas, labels, quality = 0 }) {
+  constructor({ canvas, labels, quality = 0, camMode = 'chase' }) {
     this.canvas = canvas;
     this.labelLayer = labels;
+    this.camMode = CAM_MODES.includes(camMode) ? camMode : 'chase';
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -279,6 +298,15 @@ export class Renderer3D {
     this.needSnap = true;
   }
 
+  // Cycled by the V key (public/main.js owns when to call this and remembers the choice per player —
+  // it is not a room setting). Always re-snaps so a return to chase mode doesn't visibly swing into place.
+  cycleCameraMode() {
+    const i = CAM_MODES.indexOf(this.camMode);
+    this.camMode = CAM_MODES[(i + 1) % CAM_MODES.length];
+    this.needSnap = true;
+    return this.camMode;
+  }
+
   resize() {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
@@ -308,6 +336,12 @@ export class Renderer3D {
       e = { mesh, y: Y.asphalt };
       this.cars.set(key, e);
     }
+    // The helmet-cam eye sits right where the driver's own helmet/visor/roll-bar are modelled, so those
+    // parts would otherwise fill the frame at point-blank range; hide them only for the local car.
+    if (key === 'me') {
+      const showHead = this.camMode !== 'helmet';
+      for (const m of e.mesh.userData.driverHead) m.visible = showHead;
+    }
     const target = this.surfaceHeight(dist);
     e.y += (target - e.y) * Math.min(1, dt * 12);
     const p = toScene(x, y, a);
@@ -317,6 +351,13 @@ export class Renderer3D {
   }
 
   updateCamera(dt, car) {
+    if (this.camMode === 't') this.updateMountedCamera(car, TCAM);
+    else if (this.camMode === 'helmet') this.updateMountedCamera(car, HELMET);
+    else this.updateChaseCamera(dt, car);
+    this.sky.position.copy(this.camera.position);
+  }
+
+  updateChaseCamera(dt, car) {
     const speedRatio = clamp(Math.abs(car.v) / CAR.maxSpeed, 0, 1);
     const cam = this.cam;
     if (this.needSnap || !cam.init) {
@@ -332,12 +373,31 @@ export class Renderer3D {
     const height = CAM.height + CAM.rise * speedRatio;
     this.camera.position.set(car.x - hx * dist, height, car.y - hz * dist);
     this.camera.lookAt(car.x + hx * CAM.look, 14, car.y + hz * CAM.look);
-    const fov = CAM.fov + 12 * speedRatio * speedRatio;
+    this.setFov(CAM.fov + 12 * speedRatio * speedRatio);
+  }
+
+  // T-cam / helmet-cam: bolted to the car, so position and heading come straight from the chassis every
+  // frame with no lag or independent smoothing of their own — that rigidity is what keeps them feeling
+  // stable through corners without any deliberate shake logic. `cfg.eye`/`cfg.look` are local to the car
+  // (+X forward, +Y up, matching public/car3d.js); `needSnap` (set by cycleCameraMode) doesn't apply here.
+  updateMountedCamera(car, cfg) {
+    const mine = this.cars.get('me');
+    const groundY = mine ? mine.y : Y.asphalt;
+    const ca = Math.cos(car.a);
+    const sa = Math.sin(car.a);
+    const toWorld = ([lx, ly, lz]) => [car.x + lx * ca - lz * sa, groundY + ly, car.y + lx * sa + lz * ca];
+    const [ex, ey, ez] = toWorld(cfg.eye);
+    const [lx, ly, lz] = toWorld(cfg.look);
+    this.camera.position.set(ex, ey, ez);
+    this.camera.lookAt(lx, ly, lz);
+    this.setFov(cfg.fov);
+  }
+
+  setFov(fov) {
     if (Math.abs(this.camera.fov - fov) > 0.05) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
     }
-    this.sky.position.copy(this.camera.position);
   }
 
   updateSun(car) {
@@ -392,8 +452,12 @@ export class Renderer3D {
 
     const items = [];
     const mine = this.placeCar('me', car.x, car.y, car.a, me?.color ?? '#e10600', car.dist, dt, me?.nick ?? '');
-    mine.self = true;
-    items.push(mine);
+    // A floating tag over your own head makes no sense once the camera is bolted to (or inside) that
+    // same head — skip it in T-cam/helmet-cam. Other cars' labels are unaffected.
+    if (this.camMode === 'chase') {
+      mine.self = true;
+      items.push(mine);
+    }
     const live = new Set(['me']);
     for (const o of others) {
       live.add(o.id);
