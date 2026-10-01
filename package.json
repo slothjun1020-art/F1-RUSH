@@ -10,7 +10,9 @@
     "e2e": "node scripts/e2e.mjs",
     "e2e:leave": "node scripts/e2e-leave.mjs",
     "e2e:fallback": "node scripts/e2e-fallback.mjs",
-    "e2e:features": "node scripts/e2e-features.mjs"
+    "e2e:features": "node scripts/e2e-features.mjs",
+    "e2e:ghost": "node scripts/e2e-ghost.mjs",
+    "e2e:leaderboard": "node scripts/e2e-leaderboard.mjs"
   },
   "engines": {
     "node": ">=20"

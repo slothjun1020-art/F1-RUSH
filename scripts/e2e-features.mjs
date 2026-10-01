@@ -6,9 +6,9 @@
 // Usage: node scripts/e2e-features.mjs   (needs Google Chrome; set CHROME_PATH if it lives elsewhere)
 
 import { createGameServer } from '../server/index.js';
-import { launchBrowser, sleep } from './browser-helpers.mjs';
+import { launchBrowser, sleep, tmpGhostsPath } from './browser-helpers.mjs';
 
-const game = createGameServer({ laps: 1 });
+const game = createGameServer({ laps: 1, ghostsPath: tmpGhostsPath() });
 await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${game.server.address().port}`;
 const browser = await launchBrowser();

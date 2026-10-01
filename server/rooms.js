@@ -14,12 +14,23 @@ import { SPEED_SCALE } from '../shared/scale.js';
 const MAX_SPEED_FOR_CHECKS = CAR.maxSpeed * 1.4;
 const ADVANCE_SLACK = 40 * SPEED_SCALE;
 
+// How often (ms of race time) a car's position is sampled for the best-lap ghost trail. Used only by
+// solo races with a saved record for the track (see start() and public/ghost.js, which replays it).
+const GHOST_SAMPLE_MS = 100;
+
+// Stands in for a real GhostStore (server/ghosts.js) when a Room isn't given one, so ghosts are simply
+// never recorded or offered — existing callers/tests that don't care about ghosts need no changes.
+const NULL_GHOSTS = { get: () => undefined, top5: () => [], maybeUpdate: () => false };
+
 export class Room {
-  constructor({ code, now = Date.now, laps = LAPS, onEmpty = () => {} }) {
+  constructor({
+    code, now = Date.now, laps = LAPS, onEmpty = () => {}, ghosts = NULL_GHOSTS,
+  }) {
     this.code = code;
     this.now = now;
     this.laps = laps;
     this.onEmpty = onEmpty;
+    this.ghosts = ghosts;
     this.players = new Map();
     this.hostId = null;
     this.trackId = 'monza';
@@ -157,13 +168,21 @@ export class Room {
         finishTime: null,
         place: null,
         pos: { x: g.x, y: g.y, a: g.a, v: 0 },
+        // Best-lap ghost recording (see onState/recordLapForGhost and finishPlayer below).
+        lapSamples: [[0, Math.round(g.x), Math.round(g.y), Math.round(g.a * 100) / 100]],
+        lastSampleT: startAt,
+        bestLapInRace: null,
       };
     }
     this.phase = 'racing';
     this.race = { track, startAt, finishedCount: 0, firstFinishAt: null, grid, leavers: [] };
+    // A ghost only makes sense racing solo (a real opponent would be confusing to tell apart from it,
+    // and the point is company when there's no one else) — and only once this track has a record.
+    const ghostRecord = this.players.size === 1 ? this.ghosts.get(this.trackId) : null;
     this.broadcast({
       t: 'go', track: this.trackId, laps: this.laps, startAt, serverNow: this.now(), grid,
       collisions: this.collisions, gearMode: this.gearMode,
+      ghost: ghostRecord ? { nick: ghostRecord.nick, time: ghostRecord.time, path: ghostRecord.path } : undefined,
     });
   }
 
@@ -199,10 +218,30 @@ export class Room {
       const span = rs.prog.total - before || 1;
       const frac = Math.min(1, Math.max(0, (target - before) / span));
       const tCross = prevT + (t - prevT) * frac;
-      rs.lapTimes.push(tCross - rs.lapStart);
+      const lapTime = tCross - rs.lapStart;
+      rs.lapTimes.push(lapTime);
+      this.recordLapForGhost(rs, lapTime);
       rs.lapStart = tCross;
       if (rs.lapsDone >= this.laps) this.finishPlayer(p, tCross);
     }
+
+    // Sample the car's position for the ghost trail of whichever lap is currently in progress (the one
+    // that just started, if a crossing just happened above). Throttled to roughly GHOST_SAMPLE_MS of
+    // race time, not wall-clock time between messages, so it stays steady regardless of send rate.
+    if (t - rs.lastSampleT >= GHOST_SAMPLE_MS) {
+      rs.lastSampleT = t;
+      rs.lapSamples.push([Math.round(t - rs.lapStart), Math.round(msg.x), Math.round(msg.y), Math.round(msg.a * 100) / 100]);
+    }
+  }
+
+  // Keeps rs.bestLapInRace as the fastest lap this player has completed so far this race, then starts a
+  // fresh trail for the next lap. Called on every lap crossing, including the finishing one.
+  recordLapForGhost(rs, lapTime) {
+    if (rs.lapSamples.length && (!rs.bestLapInRace || lapTime < rs.bestLapInRace.time)) {
+      rs.bestLapInRace = { time: lapTime, path: rs.lapSamples };
+    }
+    rs.lapSamples = [];
+    rs.lastSampleT = -Infinity; // so the next sample (the new lap's first point) is recorded immediately
   }
 
   finishPlayer(p, tCross) {
@@ -211,6 +250,9 @@ export class Room {
     rs.finishTime = tCross - this.race.startAt;
     rs.place = ++this.race.finishedCount;
     if (this.race.firstFinishAt == null) this.race.firstFinishAt = this.now();
+    if (rs.bestLapInRace) {
+      this.ghosts.maybeUpdate(this.trackId, { nick: p.nick, time: rs.bestLapInRace.time, path: rs.bestLapInRace.path });
+    }
     this.broadcast({
       t: 'fin', id: p.id, place: rs.place, time: Math.round(rs.finishTime), laps: rs.lapTimes.map(Math.round),
     });
@@ -292,6 +334,10 @@ export class Room {
       players: [...this.players.values()].map((p) => ({
         id: p.id, nick: p.nick, color: p.color, ready: p.ready,
       })),
+      // The selected track's leaderboard, for the lobby's TOP5 panel. Riding along on every existing
+      // broadcastRoom() call (join, ready, track change, back-to-lobby, …) keeps it live for everyone in
+      // the room with zero extra message types.
+      top5: this.ghosts.top5(this.trackId),
     };
   }
 

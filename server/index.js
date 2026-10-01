@@ -4,13 +4,17 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { Room } from './rooms.js';
+import { GhostStore } from './ghosts.js';
 import {
   CODE_ALPHABET, CODE_LENGTH, SNAP_HZ, normalizeCode, isValidCode,
 } from '../shared/protocol.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export function createGameServer({ now = Date.now, laps } = {}) {
+export function createGameServer({
+  now = Date.now, laps, ghostsPath = path.join(root, 'data', 'ghosts.json'),
+} = {}) {
+  const ghosts = new GhostStore({ filePath: ghostsPath });
   const app = express();
   app.disable('x-powered-by');
   app.get('/healthz', (_req, res) => res.type('text').send('ok'));
@@ -39,7 +43,9 @@ export function createGameServer({ now = Date.now, laps } = {}) {
 
   function createRoom() {
     const code = newCode();
-    const room = new Room({ code, now, laps, onEmpty: () => rooms.delete(code) });
+    const room = new Room({
+      code, now, laps, ghosts, onEmpty: () => rooms.delete(code),
+    });
     rooms.set(code, room);
     return room;
   }
@@ -110,6 +116,7 @@ export function createGameServer({ now = Date.now, laps } = {}) {
   return {
     server,
     rooms,
+    ghosts,
     close() {
       clearInterval(snapTimer);
       clearInterval(beatTimer);

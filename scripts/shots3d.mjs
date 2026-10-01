@@ -6,14 +6,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createGameServer } from '../server/index.js';
-import { launchBrowser, drive, sleep } from './browser-helpers.mjs';
+import {
+  launchBrowser, drive, sleep, tmpGhostsPath,
+} from './browser-helpers.mjs';
 
 // Optional 4th argument "crossover": start the car just before the point where the circuit crosses itself.
 const [trackId = 'monaco', quality = '0', outArg, where] = process.argv.slice(2);
 const outDir = outArg ?? path.join(os.tmpdir(), 'f1-shots');
 fs.mkdirSync(outDir, { recursive: true });
 
-const game = createGameServer({ laps: 3 });
+const game = createGameServer({ laps: 3, ghostsPath: tmpGhostsPath() });
 await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${game.server.address().port}`;
 const browser = await launchBrowser();

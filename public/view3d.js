@@ -52,6 +52,10 @@ const HELMET = {
 const normAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// The ghost's recorded driver may not even be in the room any more, so its original paint color means
+// nothing here — a fixed neutral tone reads as "not a real competitor" instead.
+const GHOST_COLOR = '#c9ced6';
+
 function geometryFrom({ positions, colors, indices }) {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -328,10 +332,10 @@ export class Renderer3D {
     return Y.runoff;
   }
 
-  placeCar(key, x, y, a, color, dist, dt, nick) {
+  placeCar(key, x, y, a, color, dist, dt, nick, { ghost = false } = {}) {
     let e = this.cars.get(key);
     if (!e) {
-      const mesh = createCarMesh(color);
+      const mesh = createCarMesh(color, { ghost });
       this.scene.add(mesh);
       e = { mesh, y: Y.asphalt };
       this.cars.set(key, e);
@@ -439,13 +443,16 @@ export class Renderer3D {
       const scale = clamp(420 / dist, 0.6, 1.1);
       l.el.style.transform = `translate(${px.toFixed(1)}px, ${py.toFixed(1)}px) translate(-50%, -100%) scale(${scale.toFixed(3)})`;
       l.el.classList.toggle('self', !!it.self);
+      l.el.classList.toggle('ghost', !!it.ghost);
     }
     for (const [key, l] of this.labelEls) {
       if (!seen.has(key)) { l.el.remove(); this.labelEls.delete(key); }
     }
   }
 
-  render({ dt, track, car, me, others }) {
+  render({
+    dt, track, car, me, others, ghost,
+  }) {
     if (!this.resize()) return;
     if (this.track !== track) this.setTrack(track);
     this.watchFrameRate();
@@ -463,6 +470,15 @@ export class Renderer3D {
       live.add(o.id);
       const dist = locate(track, o.x, o.y).dist;
       items.push(this.placeCar(o.id, o.x, o.y, o.a, o.color, dist, dt, o.nick));
+    }
+    // The best-lap ghost (see public/ghost.js / public/game.js): a translucent car, solo races only,
+    // carrying its own already-formatted label text ("베스트랩: nick (time)") rather than a plain nick.
+    if (ghost) {
+      live.add('ghost');
+      const dist = locate(track, ghost.x, ghost.y).dist;
+      const item = this.placeCar('ghost', ghost.x, ghost.y, ghost.a, GHOST_COLOR, dist, dt, ghost.label, { ghost: true });
+      item.ghost = true;
+      items.push(item);
     }
     for (const [key, e] of this.cars) {
       if (!live.has(key)) { this.scene.remove(e.mesh); disposeCarMesh(e.mesh); this.cars.delete(key); }

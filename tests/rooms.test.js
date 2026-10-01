@@ -354,3 +354,170 @@ test('garbage state reports are ignored', () => {
   room.handle(a.id, 'hello');
   assert.equal(room.players.get(a.id).rs.prog.total, before);
 });
+
+// ---- best-lap ghost -----------------------------------------------------------
+
+// A minimal stand-in for server/ghosts.js's GhostStore (same get/maybeUpdate shape, no file I/O),
+// so these tests exercise Room's wiring without touching disk — GhostStore itself is covered by
+// tests/ghosts.test.js, and scripts/e2e-ghost.mjs exercises the real file-backed store end to end.
+function fakeGhosts() {
+  const records = new Map();
+  return {
+    get: (trackId) => records.get(trackId)?.[0],
+    top5: (trackId) => (records.get(trackId) ?? []).map(({ nick, time }) => ({ nick, time })),
+    maybeUpdate(trackId, { nick, time, path }) {
+      if (!path.length) return false;
+      const list = records.get(trackId) ?? [];
+      const existing = list.find((r) => r.nick === nick);
+      if (existing && existing.time <= time) return false;
+      const next = list.filter((r) => r.nick !== nick);
+      next.push({ nick, time, path });
+      next.sort((a, b) => a.time - b.time);
+      next.length = Math.min(next.length, 5);
+      next.forEach((r, i) => { if (i > 0) delete r.path; });
+      records.set(trackId, next);
+      return true;
+    },
+  };
+}
+
+function soloSetup(laps = 1) {
+  const clock = { t: 1_000_000 };
+  const ghosts = fakeGhosts();
+  const room = new Room({
+    code: 'TEST', now: () => clock.t, laps, ghosts,
+  });
+  const join = (nick) => {
+    const inbox = [];
+    const res = room.addPlayer((data) => inbox.push(JSON.parse(data)), nick);
+    return { ...res, inbox, last: (type) => [...inbox].reverse().find((m) => m.t === type) };
+  };
+  return {
+    clock, room, join, ghosts,
+  };
+}
+
+test('a solo race with no track record yet starts with no ghost, and finishing seeds one', () => {
+  const {
+    clock, room, join, ghosts,
+  } = soloSetup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  assert.equal(a.last('go').ghost, undefined, 'no record yet for this track');
+
+  const drive = makeDriver(room, clock, a, 1);
+  for (let i = 0; i < 20 * 400 && room.phase === 'racing'; i++) {
+    clock.t += 50;
+    drive();
+    room.tick();
+  }
+  assert.equal(room.phase, 'results');
+
+  const record = ghosts.get('redbullring');
+  assert.ok(record, 'finishing the race saved a best-lap record');
+  assert.equal(record.nick, 'Solo');
+  assert.ok(record.path.length > 1, 'the lap trail has more than one sample');
+  assert.ok(
+    record.path.every(([t]) => t >= 0 && t <= record.time + 1),
+    'every sample falls within the recorded lap',
+  );
+  const best = Math.min(...room.players.get(a.id).rs.lapTimes);
+  assert.equal(record.time, best, 'the saved time matches the best lap used on the results screen');
+});
+
+test('a second solo race on the same track is sent the saved ghost', () => {
+  const { room, join, ghosts } = soloSetup(1);
+  ghosts.maybeUpdate('redbullring', { nick: 'Champ', time: 42000, path: [[0, 0, 0, 0], [100, 1, 1, 0]] });
+  const a = join('Challenger');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const go = a.last('go');
+  assert.deepEqual(go.ghost, { nick: 'Champ', time: 42000, path: [[0, 0, 0, 0], [100, 1, 1, 0]] });
+});
+
+test('a track with no saved record offers no ghost', () => {
+  const { room, join } = soloSetup(1);
+  const a = join('Alone');
+  room.handle(a.id, { t: 'track', id: 'suzuka' });
+  room.handle(a.id, { t: 'start' });
+  assert.equal(a.last('go').ghost, undefined);
+});
+
+test('a multiplayer race never attaches a ghost, even with a saved record', () => {
+  const { room, join, ghosts } = soloSetup(1);
+  ghosts.maybeUpdate('redbullring', { nick: 'Champ', time: 42000, path: [[0, 0, 0, 0]] });
+  const a = join('Host');
+  const b = join('Guest');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(a.id, { t: 'start' });
+  assert.equal(a.last('go').ghost, undefined);
+});
+
+test('a slower repeat solo run does not overwrite a faster saved ghost', () => {
+  const {
+    clock, room, join, ghosts,
+  } = soloSetup(1);
+  ghosts.maybeUpdate('redbullring', { nick: 'Champ', time: 1, path: [[0, 0, 0, 0]] }); // unbeatable
+  const a = join('Slower');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+
+  const drive = makeDriver(room, clock, a, 1);
+  for (let i = 0; i < 20 * 400 && room.phase === 'racing'; i++) {
+    clock.t += 50;
+    drive();
+    room.tick();
+  }
+  assert.equal(room.phase, 'results');
+  assert.equal(ghosts.get('redbullring').nick, 'Champ', 'the existing faster record survives');
+});
+
+// ---- lobby TOP5 leaderboard (rides along on the 'room' broadcast) -------------------------------
+
+test('the room message carries the selected track\'s leaderboard', () => {
+  const { room, join, ghosts } = soloSetup(1);
+  ghosts.maybeUpdate('monza', { nick: 'Champ', time: 50000, path: [[0, 0, 0, 0]] }); // room defaults to monza
+  const a = join('Solo');
+  assert.deepEqual(a.last('room').top5, [{ nick: 'Champ', time: 50000 }]);
+});
+
+test('an untouched track reports an empty leaderboard, not an error', () => {
+  const { join } = soloSetup(1);
+  const a = join('Solo');
+  assert.deepEqual(a.last('room').top5, []);
+});
+
+test('switching track updates everyone\'s leaderboard in the room immediately', () => {
+  const { room, join, ghosts } = soloSetup(1);
+  ghosts.maybeUpdate('monza', { nick: 'MonzaChamp', time: 50000, path: [[0, 0, 0, 0]] });
+  ghosts.maybeUpdate('suzuka', { nick: 'SuzukaChamp', time: 60000, path: [[0, 0, 0, 0]] });
+  const a = join('Host');
+  const b = join('Guest');
+  assert.deepEqual(a.last('room').top5, [{ nick: 'MonzaChamp', time: 50000 }]);
+
+  room.handle(a.id, { t: 'track', id: 'suzuka' });
+  assert.deepEqual(a.last('room').top5, [{ nick: 'SuzukaChamp', time: 60000 }], 'the host sees the new track\'s board');
+  assert.deepEqual(b.last('room').top5, [{ nick: 'SuzukaChamp', time: 60000 }], 'so does the guest, same broadcast');
+});
+
+test('finishing a race and returning to the lobby reflects the newly set record', () => {
+  const { clock, room, join } = soloSetup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+
+  const drive = makeDriver(room, clock, a, 1);
+  for (let i = 0; i < 20 * 400 && room.phase === 'racing'; i++) {
+    clock.t += 50;
+    drive();
+    room.tick();
+  }
+  assert.equal(room.phase, 'results');
+
+  room.handle(a.id, { t: 'lobby' });
+  const top5 = a.last('room').top5;
+  assert.equal(top5.length, 1);
+  assert.equal(top5[0].nick, 'Solo');
+});

@@ -13,8 +13,17 @@ import {
   createJitterTracker, recordArrival, stepJitterTracker,
   remotePoseAt, createRemoteSmoother, smoothRemote,
 } from './interp.js';
+import { ghostPoseAt } from './ghost.js';
 
 const SHIFT_LIGHT_RATIO = 0.92; // "too fast for this gear" cue once past this fraction of its top speed
+
+// The recorded lap started mid-race at whatever speed the driver already had, not from a standing start,
+// so replaying it from the green light makes the ghost look like it launches instantly. Holding it at its
+// first point for a beat (the real car is still off the line accelerating anyway) reads much more natural.
+const GHOST_START_DELAY_MS = 1200;
+// Keep in sync with view3d.js's GHOST_COLOR — not imported from there directly, since this file stays
+// renderer-agnostic (view3d.js pulls in Three.js, which the minimap's flat 2D canvas has no need for).
+const GHOST_MINIMAP_COLOR = '#c9ced6';
 
 const SEND_EVERY = 1000 / SEND_HZ;   // ms between position reports to the server (see shared/protocol.js)
 const r1 = (n) => Math.round(n);     // world units are large enough that whole units are plenty precise
@@ -31,7 +40,7 @@ export function formatTime(ms) {
 export class RaceView {
   constructor({
     renderer, hud, net, track, laps, startAt, grid, meId, players, onLap, onReset,
-    gearMode = false, collisions = false, debug = false,
+    gearMode = false, collisions = false, debug = false, ghost = null,
   }) {
     this.renderer = renderer;
     this.hud = hud;
@@ -49,6 +58,10 @@ export class RaceView {
     this.gearMode = gearMode;
     this.collisions = collisions;
     this.gear = 1;
+    // The best-lap ghost (solo races only, see server/rooms.js and public/ghost.js). Its label is built
+    // once here rather than every frame — it never changes while this race is running.
+    this.ghost = ghost;
+    this.ghostLabel = ghost ? `베스트랩: ${ghost.nick} (${formatTime(ghost.time)})` : '';
 
     const g = grid.find((x) => x.id === meId) ?? grid[0];
     this.car = createCar(g.x, g.y, g.a, track);
@@ -151,9 +164,15 @@ export class RaceView {
     const dt = Math.min((ts - this.last) / 1000 || 0.016, 1 / 20);
     this.last = ts;
     const sn = this.net.serverNow();
-    this.update(dt, sn);
-    this.draw(dt, sn);
-    if (this.debug) this.updateDebugHud(dt);
+    // A stray exception here must never silently kill the loop — that would freeze the picture *and*
+    // stop reading keyboard input (both live inside update()/draw()), with nothing visible to say why.
+    try {
+      this.update(dt, sn);
+      this.draw(dt, sn);
+      if (this.debug) this.updateDebugHud(dt);
+    } catch (err) {
+      console.error('race frame failed, continuing:', err);
+    }
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -248,10 +267,18 @@ export class RaceView {
       const shown = smoothRemote(r.smoother, raw, dt, plausibleStep);
       others.push({ id, x: shown.x, y: shown.y, a: shown.a, color: info.color, nick: info.nick });
     }
+    let ghost = null;
+    if (this.ghost && sn >= this.startAt) {
+      // Clamped at 0 rather than skipped: the ghost is already visible, sitting at its first recorded
+      // point, for the first GHOST_START_DELAY_MS — see the constant above for why.
+      const elapsed = Math.max(0, sn - this.startAt - GHOST_START_DELAY_MS);
+      const pose = ghostPoseAt(this.ghost.path, elapsed);
+      if (pose) ghost = { x: pose.x, y: pose.y, a: pose.a, label: this.ghostLabel };
+    }
     this.renderer.render({
-      dt, sn, track: this.track, car: this.car, me: this.players.get(this.meId), others,
+      dt, sn, track: this.track, car: this.car, me: this.players.get(this.meId), others, ghost,
     });
-    this.drawHud(sn, others);
+    this.drawHud(sn, others, ghost);
   }
 
   updateDebugHud(dt) {
@@ -295,7 +322,7 @@ export class RaceView {
     }
   }
 
-  drawHud(sn, others) {
+  drawHud(sn, others, ghost) {
     const { hud, track } = this;
     const started = sn >= this.startAt;
     const lap = Math.min(this.laps, this.lapsDone + 1);
@@ -376,6 +403,7 @@ export class RaceView {
       mctx.fill();
     };
     for (const o of others) dotAt(o.x, o.y, o.color, 4);
+    if (ghost) dotAt(ghost.x, ghost.y, GHOST_MINIMAP_COLOR, 4);
     dotAt(this.car.x, this.car.y, '#ffffff', 6);
     dotAt(this.car.x, this.car.y, this.players.get(this.meId)?.color ?? '#e10600', 4);
   }

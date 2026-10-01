@@ -62,37 +62,47 @@
   </section>
 
   <section id="screen-lobby" class="screen" hidden>
-    <div class="lobby">
-      <header>
-        <div>
-          <small>방 코드</small>
-          <div id="lobby-code" class="code"></div>
-        </div>
-        <button id="btn-copy">초대 링크 복사</button>
-      </header>
-      <div class="cols">
-        <div class="col-players">
-          <h2>플레이어 <span id="pcount"></span></h2>
-          <ul id="plist"></ul>
-        </div>
-        <div class="col-tracks">
-          <h2>서킷 선택 <small id="track-hint"></small></h2>
-          <div id="tracks" class="tracks"></div>
-          <div class="lobby-toggles">
-            <button id="btn-collisions" class="toggle" type="button">
-              <span class="t-label">🚗💥 차량 충돌</span><span class="t-state">꺼짐</span>
-            </button>
-            <button id="btn-gearmode" class="toggle" type="button">
-              <span class="t-label">🔧 기어 모드</span><span class="t-state">꺼짐</span>
-            </button>
+    <div class="lobby-layout">
+      <div class="lobby">
+        <header>
+          <div>
+            <small>방 코드</small>
+            <div id="lobby-code" class="code"></div>
+          </div>
+          <button id="btn-copy">초대 링크 복사</button>
+        </header>
+        <div class="cols">
+          <div class="col-players">
+            <h2>플레이어 <span id="pcount"></span></h2>
+            <ul id="plist"></ul>
+          </div>
+          <div class="col-tracks">
+            <h2>서킷 선택 <small id="track-hint"></small></h2>
+            <div id="tracks" class="tracks"></div>
+            <div class="lobby-toggles">
+              <button id="btn-collisions" class="toggle" type="button">
+                <span class="t-label">🚗💥 차량 충돌</span><span class="t-state">꺼짐</span>
+              </button>
+              <button id="btn-gearmode" class="toggle" type="button">
+                <span class="t-label">🔧 기어 모드</span><span class="t-state">꺼짐</span>
+              </button>
+            </div>
           </div>
         </div>
+        <footer>
+          <button id="btn-ready">준비</button>
+          <button id="btn-start" class="primary">출발!</button>
+          <span id="lobby-hint"></span>
+        </footer>
       </div>
-      <footer>
-        <button id="btn-ready">준비</button>
-        <button id="btn-start" class="primary">출발!</button>
-        <span id="lobby-hint"></span>
-      </footer>
+      <aside class="leaderboard">
+        <h2>🏆 랩타임 TOP 5 <small id="lb-track"></small></h2>
+        <p id="lb-empty" class="sub" hidden>아직 기록이 없어요</p>
+        <table id="lb-table">
+          <thead><tr><th>순위</th><th>닉네임</th><th>기록</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </aside>
     </div>
   </section>
 

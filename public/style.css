@@ -30,6 +30,10 @@ body {
 }
 .nick3d::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
 .nick3d.self { background: rgba(255, 255, 255, 0.22); }
+.nick3d.ghost {
+  font-size: 11px; font-weight: 600; padding: 1px 7px 1px 6px;
+  background: rgba(201, 206, 214, 0.18); border-style: dashed; opacity: 0.85;
+}
 
 button, input { font: inherit; color: inherit; }
 button {
@@ -71,11 +75,24 @@ label { font-size: 13px; color: var(--muted); margin-bottom: -6px; }
 .error { color: #ff7b72; min-height: 1.3em; margin: 0; font-size: 14px; }
 
 /* Lobby */
+.lobby-layout {
+  width: min(1360px, 100%); max-height: 100%; display: grid;
+  grid-template-columns: minmax(0, 1040px) minmax(260px, 360px); gap: 20px; align-items: start;
+}
+.lobby-layout > * { min-width: 0; }
 .lobby {
-  width: min(1040px, 100%); background: var(--panel); border: 1px solid var(--line);
+  width: 100%; background: var(--panel); border: 1px solid var(--line);
   border-radius: 18px; padding: 22px; display: flex; flex-direction: column; gap: 16px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.5); max-height: 100%;
 }
+.leaderboard {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 22px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5); max-height: 100%; overflow: auto;
+}
+.leaderboard h2 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 15px; }
+.leaderboard #lb-track { font-weight: 400; }
+.leaderboard #lb-empty { margin: 0; }
+#lb-table td:last-child, #lb-table th:last-child { text-align: right; }
 .lobby header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .lobby small { color: var(--muted); font-size: 12px; }
 .code { font-size: 38px; font-weight: 800; letter-spacing: 8px; line-height: 1.1; }
@@ -221,6 +238,7 @@ tr.left td { color: var(--muted); }
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 @media (max-width: 760px) {
+  .lobby-layout { grid-template-columns: 1fr; }
   .cols { grid-template-columns: 1fr; }
   .code { font-size: 30px; }
   #hud-help { display: none; }

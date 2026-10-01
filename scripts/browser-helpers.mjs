@@ -2,7 +2,15 @@
 // and drive the player's car through real keyboard events using the bot from shared/bot.js.
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import puppeteer from 'puppeteer-core';
+
+// A fresh, isolated ghost-records file for a test server, so finishing a race in one script run never
+// writes to (or is affected by) the real repo's data/ghosts.json or another script's run.
+export function tmpGhostsPath() {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'f1-ghosts-')), 'ghosts.json');
+}
 
 export function findChrome() {
   const found = process.env.CHROME_PATH ?? [

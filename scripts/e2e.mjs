@@ -7,12 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createGameServer } from '../server/index.js';
-import { launchBrowser, drive, sleep } from './browser-helpers.mjs';
+import { launchBrowser, drive, sleep, tmpGhostsPath } from './browser-helpers.mjs';
 
 const outDir = process.env.E2E_OUT ?? path.join(os.tmpdir(), 'f1-e2e');
 fs.mkdirSync(outDir, { recursive: true });
 
-const game = createGameServer({ laps: 1 });
+const game = createGameServer({ laps: 1, ghostsPath: tmpGhostsPath() });
 await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${game.server.address().port}`;
 const browser = await launchBrowser();

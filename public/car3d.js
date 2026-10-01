@@ -14,18 +14,42 @@ const darkMat = new THREE.MeshStandardMaterial({ color: '#1b1d22', roughness: 0.
 const helmetMat = new THREE.MeshStandardMaterial({ color: '#f7f7f7', roughness: 0.4, flatShading: true });
 const visorMat = new THREE.MeshStandardMaterial({ color: '#111318', roughness: 0.3, flatShading: true });
 
-export function createCarMesh(color) {
+const GHOST_OPACITY = 0.38;
+
+export function createCarMesh(color, { ghost = false } = {}) {
   const body = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.15, flatShading: true });
   const trim = new THREE.MeshStandardMaterial({
     color: new THREE.Color(color).multiplyScalar(0.6), roughness: 0.6, flatShading: true,
   });
+
+  // A ghost car is translucent. wheelMat/darkMat/helmetMat/visorMat above are shared by every car for
+  // performance, so making them transparent directly would make every car translucent — instead, only
+  // when building a ghost, each one used is cloned (and memoized per mesh) into its own see-through
+  // copy, tracked below so disposeCarMesh cleans them up the same way it already does body/trim.
+  const ghostClones = new Map();
+  const mat = (shared) => {
+    if (!ghost) return shared;
+    let clone = ghostClones.get(shared);
+    if (!clone) {
+      clone = shared.clone();
+      clone.transparent = true;
+      clone.opacity = GHOST_OPACITY;
+      clone.depthWrite = false;
+      ghostClones.set(shared, clone);
+    }
+    return clone;
+  };
+  if (ghost) {
+    for (const m of [body, trim]) { m.transparent = true; m.opacity = GHOST_OPACITY; m.depthWrite = false; }
+  }
+
   const car = new THREE.Group();
 
   const add = (geometry, material, x, y, z, { rx = 0, ry = 0, rz = 0 } = {}) => {
     const m = new THREE.Mesh(geometry, material);
     m.position.set(x, y, z);
     m.rotation.set(rx, ry, rz);
-    m.castShadow = true;
+    m.castShadow = !ghost; // a solid shadow under a see-through car would look wrong
     car.add(m);
     return m;
   };
@@ -42,42 +66,42 @@ export function createCarMesh(color) {
 
   // Driver: helmet and halo. In helmet-cam the eye sits right where these are, so view3d.js hides them
   // for your own car (a driver can't see their own helmet from inside it) — see userData.driverHead below.
-  const helmet = add(geo('helmet', () => new THREE.SphereGeometry(4.2, 7, 5)), helmetMat, 2, 14, 0);
-  const visor = add(box(3, 4, 5.5), visorMat, 5.2, 14, 0);
-  const rollbar = add(box(1.4, 1.4, 10), darkMat, 4, 18.5, 0);
+  const helmet = add(geo('helmet', () => new THREE.SphereGeometry(4.2, 7, 5)), mat(helmetMat), 2, 14, 0);
+  const visor = add(box(3, 4, 5.5), mat(visorMat), 5.2, 14, 0);
+  const rollbar = add(box(1.4, 1.4, 10), mat(darkMat), 4, 18.5, 0);
 
   // Cockpit rim and a hint of a steering wheel, just ahead of and below the helmet. Too small to read
   // from chase/T-cam distance, but sits right at the bottom of the helmet-cam view (see view3d.js).
-  add(box(6, 1.6, 9), darkMat, 8, 12, 0);
-  add(geo('wheel', () => new THREE.TorusGeometry(2.6, 0.5, 5, 10)), darkMat, 6.5, 12.3, 0, { rx: Math.PI / 2, ry: 0.15 });
+  add(box(6, 1.6, 9), mat(darkMat), 8, 12, 0);
+  add(geo('wheel', () => new THREE.TorusGeometry(2.6, 0.5, 5, 10)), mat(darkMat), 6.5, 12.3, 0, { rx: Math.PI / 2, ry: 0.15 });
 
   // Front wing with end plates
-  add(box(7, 1.6, 30), darkMat, 30, 3.2, 0);
+  add(box(7, 1.6, 30), mat(darkMat), 30, 3.2, 0);
   add(box(8, 5, 1.4), trim, 30, 5, 15);
   add(box(8, 5, 1.4), trim, 30, 5, -15);
   add(box(5, 1.2, 12), trim, 30.5, 4.6, 0);
 
   // Rear wing on two struts
-  add(box(7, 2, 26), darkMat, -27, 20, 0);
+  add(box(7, 2, 26), mat(darkMat), -27, 20, 0);
   add(box(9, 11, 1.4), trim, -27, 16, 13);
   add(box(9, 11, 1.4), trim, -27, 16, -13);
-  add(box(2, 10, 1.6), darkMat, -24, 14.5, 4);
-  add(box(2, 10, 1.6), darkMat, -24, 14.5, -4);
+  add(box(2, 10, 1.6), mat(darkMat), -24, 14.5, 4);
+  add(box(2, 10, 1.6), mat(darkMat), -24, 14.5, -4);
 
   // Wheels (axis along Z): bigger and wider at the rear
   const front = geo('wheelF', () => new THREE.CylinderGeometry(6.5, 6.5, 8, 9));
   const rear = geo('wheelR', () => new THREE.CylinderGeometry(7.5, 7.5, 10, 9));
   for (const s of [-1, 1]) {
-    add(front, wheelMat, 18, 6.5, s * 14.5, { rx: Math.PI / 2 });
-    add(rear, wheelMat, -18, 7.5, s * 14.5, { rx: Math.PI / 2 });
+    add(front, mat(wheelMat), 18, 6.5, s * 14.5, { rx: Math.PI / 2 });
+    add(rear, mat(wheelMat), -18, 7.5, s * 14.5, { rx: Math.PI / 2 });
   }
   // Suspension arms so the wheels don't float
-  add(box(2, 1.4, 12), darkMat, 18, 7, 8);
-  add(box(2, 1.4, 12), darkMat, 18, 7, -8);
-  add(box(2, 1.4, 12), darkMat, -18, 8, 8);
-  add(box(2, 1.4, 12), darkMat, -18, 8, -8);
+  add(box(2, 1.4, 12), mat(darkMat), 18, 7, 8);
+  add(box(2, 1.4, 12), mat(darkMat), 18, 7, -8);
+  add(box(2, 1.4, 12), mat(darkMat), -18, 8, 8);
+  add(box(2, 1.4, 12), mat(darkMat), -18, 8, -8);
 
-  car.userData.paint = [body, trim];
+  car.userData.paint = [body, trim, ...ghostClones.values()];
   car.userData.driverHead = [helmet, visor, rollbar];
   return car;
 }

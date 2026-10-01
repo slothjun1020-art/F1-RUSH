@@ -102,12 +102,19 @@ function maybeShowGearInfo() {
 
 $('gear-info-ok').onclick = closeGearInfo;
 
-// HUD buttons. They must never take keyboard focus, otherwise the Space bar (brake) would "click" them.
-for (const id of ['btn-reset', 'btn-quit']) {
-  const b = $(id);
+// Plain action buttons never keep keyboard focus after a click — otherwise the Space bar (brake) or an
+// arrow key could "press" one that's now hidden or irrelevant (this is what let keyboard input go dead
+// after clicking around the lobby/results screens). Dialog buttons (confirm-no/yes, gear-info-ok) are
+// the deliberate exception: they're meant to hold focus while their dialog is open, which is safe since
+// driving input is already frozen for as long as that dialog is up.
+function preventFocusRetention(b) {
   b.tabIndex = -1;
   b.addEventListener('mousedown', (e) => e.preventDefault());
 }
+for (const id of [
+  'btn-reset', 'btn-quit', 'btn-start', 'btn-ready', 'btn-back', 'btn-leave',
+  'btn-collisions', 'btn-gearmode', 'btn-copy', 'btn-create', 'btn-join',
+]) preventFocusRetention($(id));
 $('btn-reset').onclick = (e) => { requestReset(); e.currentTarget.blur(); };
 $('btn-quit').onclick = (e) => { e.currentTarget.blur(); askToLeave(); };
 
@@ -250,7 +257,12 @@ function onRoom(m) {
   renderLobby();
 }
 
-function onGo(m) {
+async function onGo(m) {
+  // setupRenderer3d() usually finishes in a few milliseconds, well before anyone can click through to a
+  // race — but under extreme load, or an ultra-fast automated client, a 'go' can in principle arrive
+  // first. Wait for it rather than crash on a still-null renderer3d.
+  await renderer3dReady;
+  if (!renderer3d) return; // WebGL genuinely unavailable; show('nowebgl') already covers this case
   const track = getTrack(m.track);
   stopRace();
   renderer3d.setTrack(track);
@@ -258,7 +270,7 @@ function onGo(m) {
   hud.gear.root.hidden = !m.gearMode;
   race = new RaceView({
     renderer: renderer3d, hud, net, track, laps: m.laps, startAt: m.startAt, grid: m.grid, meId, players: room.players,
-    debug: debugHud, gearMode: m.gearMode, collisions: m.collisions,
+    debug: debugHud, gearMode: m.gearMode, collisions: m.collisions, ghost: m.ghost ?? null,
     onLap: (n, ms, done) => {
       if (!done) toast(`LAP ${n} 완료  ${formatTime(ms)}`);
     },
@@ -297,6 +309,7 @@ function buildTrackCards() {
     const btn = document.createElement('button');
     btn.className = 'track';
     btn.dataset.id = info.id;
+    preventFocusRetention(btn);
     const cv = document.createElement('canvas');
     cv.width = 240;
     cv.height = 160;
@@ -366,6 +379,29 @@ function renderLobby() {
   else if (isHost) hint = others.length === 0 ? '친구에게 방 코드를 알려 주세요 (혼자서도 연습할 수 있어요)' : allReady ? '' : '모두 준비하면 출발할 수 있어요';
   else hint = me?.ready ? '방장이 시작하길 기다리는 중…' : '준비 버튼을 눌러 주세요';
   $('lobby-hint').textContent = hint;
+
+  renderLeaderboard();
+}
+
+// The selected track's TOP5 lap-time board (server/ghosts.js). Lives in room.top5, so it rides along on
+// every 'room' broadcast — including the moment the host switches tracks — with no extra round trip.
+function renderLeaderboard() {
+  const info = trackList().find((t) => t.id === room.track);
+  $('lb-track').textContent = info ? info.name : '';
+  const rows = room.top5 ?? [];
+  $('lb-empty').hidden = rows.length > 0;
+  $('lb-table').hidden = rows.length === 0;
+  $('lb-table').tBodies[0].replaceChildren(...rows.map((r, i) => {
+    const tr = document.createElement('tr');
+    const place = document.createElement('td');
+    place.textContent = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : String(i + 1);
+    const nick = document.createElement('td');
+    nick.textContent = r.nick;
+    const time = document.createElement('td');
+    time.textContent = formatTime(r.time);
+    tr.append(place, nick, time);
+    return tr;
+  }));
 }
 
 $('btn-ready').onclick = () => {
@@ -456,5 +492,5 @@ async function setupRenderer3d() {
   });
 }
 
-setupRenderer3d();
+const renderer3dReady = setupRenderer3d();
 $('btn-leave').onclick = leaveToStart;
