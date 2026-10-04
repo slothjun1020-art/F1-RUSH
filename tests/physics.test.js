@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrack } from '../shared/track-geom.js';
+import { buildTrack, KERB_W } from '../shared/track-geom.js';
 import {
-  CAR, createCar, stepCar, GEAR_SPEEDS, worldToKmh, kmhToWorld,
+  CAR, createCar, stepCar, GEAR_SPEEDS, worldToKmh, kmhToWorld, wearRate,
 } from '../shared/physics.js';
 
 // A very long straight, so braking and coasting tests never touch a corner or the wall.
@@ -249,3 +249,73 @@ function run3(car, input, seconds, gear) {
   }
   return speeds;
 }
+
+// ---- tire wear --------------------------------------------------------------------------------
+
+// `straight`'s centerline runs along +X at this index (see its points), so a lateral offset from it is
+// along Y — this places a stationary car at a known distance from the centerline for wear-zone tests.
+function carAt(lateral) {
+  const i = Math.floor(straight.n * 0.1);
+  const car = createCar(straight.xs[i], straight.ys[i], straight.angs[i], straight);
+  car.y += lateral;
+  return car;
+}
+
+test('tire wear: normal asphalt never accumulates wear', () => {
+  const car = carAt(0);
+  for (let i = 0; i < 300; i++) stepCar(car, NONE, DT, straight, null, true);
+  assert.equal(car.wear, 0);
+});
+
+test('tire wear: grass wears tires faster than the kerb band does', () => {
+  const kerbCar = carAt(straight.halfW + KERB_W / 2);
+  const grassCar = carAt(straight.halfW + KERB_W + 50);
+  for (let i = 0; i < 120; i++) { // 1 second at DT = 1/120
+    stepCar(kerbCar, NONE, DT, straight, null, true);
+    stepCar(grassCar, NONE, DT, straight, null, true);
+  }
+  assert.ok(kerbCar.wear > 0, 'kerb wears tires');
+  assert.ok(grassCar.wear > 0, 'grass wears tires');
+  assert.ok(grassCar.wear > kerbCar.wear, 'grass wears faster than the kerb');
+  assert.ok(Math.abs(kerbCar.wear - CAR.wearKerbRate) < 1e-6, `kerb: ${kerbCar.wear} vs rate ${CAR.wearKerbRate}`);
+  assert.ok(Math.abs(grassCar.wear - CAR.wearGrassRate) < 1e-6, `grass: ${grassCar.wear} vs rate ${CAR.wearGrassRate}`);
+});
+
+test('tire wear: disabled (tireWear=false) never accumulates, even off the track', () => {
+  const car = carAt(straight.halfW + KERB_W + 50);
+  for (let i = 0; i < 300; i++) stepCar(car, NONE, DT, straight, null, false);
+  assert.equal(car.wear, 0);
+});
+
+test('tire wear: caps at 1 (100%), never overshoots', () => {
+  const car = carAt(straight.halfW + KERB_W + 50);
+  for (let i = 0; i < 120 * 60; i++) stepCar(car, NONE, DT, straight, null, true); // 60s of continuous grass
+  assert.equal(car.wear, 1);
+});
+
+test('tire wear: higher wear measurably weakens acceleration, but never fully stops it', () => {
+  const fresh = carAt(0);
+  const worn = carAt(0);
+  worn.wear = 0.9;
+  stepCar(fresh, { throttle: 1, brake: 0, steer: 0 }, DT, straight, null, true);
+  stepCar(worn, { throttle: 1, brake: 0, steer: 0 }, DT, straight, null, true);
+  assert.ok(worn.v < fresh.v, `worn gained ${worn.v.toFixed(2)}, fresh gained ${fresh.v.toFixed(2)}`);
+  assert.ok(worn.v > 0, 'still accelerates somewhat, never fully stuck');
+});
+
+test('tire wear: the acceleration penalty only applies when tireWear is on', () => {
+  const worn = carAt(0);
+  worn.wear = 0.9;
+  const freshRef = carAt(0); // wear stays 0
+  stepCar(worn, { throttle: 1, brake: 0, steer: 0 }, DT, straight, null, false); // tireWear OFF
+  stepCar(freshRef, { throttle: 1, brake: 0, steer: 0 }, DT, straight, null, false);
+  assert.equal(worn.v, freshRef.v, 'wear is ignored for acceleration when tireWear is off');
+});
+
+test('wearRate(): 0 on the asphalt, the kerb rate on the kerb band, the grass rate beyond it', () => {
+  assert.equal(wearRate(0, straight), 0);
+  assert.equal(wearRate(straight.halfW, straight), 0, 'right at the edge of the asphalt: still 0');
+  assert.equal(wearRate(straight.halfW + 1, straight), CAR.wearKerbRate);
+  assert.equal(wearRate(straight.halfW + KERB_W, straight), CAR.wearKerbRate, 'right at the edge of the kerb: still kerb rate');
+  assert.equal(wearRate(straight.halfW + KERB_W + 1, straight), CAR.wearGrassRate);
+});

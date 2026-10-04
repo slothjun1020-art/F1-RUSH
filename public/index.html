@@ -17,6 +17,10 @@
       <div class="stat"><small>랩</small><b id="hud-lap">LAP 1/5</b></div>
       <div class="stat"><small>순위</small><b id="hud-pos">1/1</b></div>
       <div class="stat"><small>시간</small><b id="hud-time">0:00.000</b></div>
+      <div class="stat" id="hud-tire" hidden>
+        <small>타이어</small>
+        <div class="tire-gauge"><span id="tire-icon" class="tire-icon"></span><b id="tire-pct">0%</b></div>
+      </div>
     </div>
     <ol id="hud-board"></ol>
     <div id="hud-center"></div>
@@ -85,6 +89,9 @@
               </button>
               <button id="btn-gearmode" class="toggle" type="button">
                 <span class="t-label">🔧 기어 모드</span><span class="t-state">꺼짐</span>
+              </button>
+              <button id="btn-tirewear" class="toggle" type="button">
+                <span class="t-label">🛞 타이어 마모</span><span class="t-state">꺼짐</span>
               </button>
             </div>
           </div>

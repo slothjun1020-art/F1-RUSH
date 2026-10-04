@@ -159,6 +159,18 @@ td .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; 
 }
 .stat small { display: block; font-size: 11px; color: var(--muted); }
 .stat b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.tire-gauge { display: flex; align-items: center; gap: 6px; }
+.tire-gauge b { font-size: 18px; }
+/* An oval, like a tire seen edge-on. Color is set by whichever .w-* class drawHud() toggles on it
+   (see game.js's WEAR_COLOR_STOPS): green -> yellow -> orange -> red as wear climbs toward 100%. */
+.tire-icon {
+  width: 16px; height: 26px; border-radius: 50%; flex: none; border: 2px solid rgba(0,0,0,0.4);
+  background: var(--green); transition: background 0.2s;
+}
+.tire-icon.w-ok { background: var(--green); }
+.tire-icon.w-warn { background: var(--gold); }
+.tire-icon.w-high { background: #ff8a1f; }
+.tire-icon.w-crit { background: var(--red); }
 #hud-board {
   position: absolute; top: 14px; right: 14px; list-style: none; margin: 0; padding: 8px;
   background: rgba(10, 13, 20, 0.72); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;
@@ -166,6 +178,12 @@ td .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; 
 }
 #hud-board li { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; font-size: 14px; }
 #hud-board li.me { background: rgba(255,255,255,0.14); font-weight: 700; }
+/* Clickable only once the local player has DNF'd — clicking another row picks who to spectate (see
+   game.js's spectate()/draw()). pointer-events is re-enabled per row, not on the whole board, so the
+   player's own (non-clickable) row never looks interactive. */
+#hud-board.spectate-mode li:not(.me) { pointer-events: auto; cursor: pointer; }
+#hud-board.spectate-mode li:not(.me):hover { background: rgba(255,255,255,0.08); }
+#hud-board li.spectating { outline: 2px solid var(--gold); background: rgba(245,196,0,0.12); }
 #hud-board .pos { width: 14px; color: var(--muted); text-align: right; }
 #hud-board .nick { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #hud-board .lapn { color: var(--muted); font-size: 12px; }
@@ -179,6 +197,10 @@ td .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; 
 #hud-center.warn { color: #ff5c4d; font-size: 40px; }
 #hud-center.finish {
   background: rgba(10,13,20,0.8); border: 1px solid rgba(255,255,255,0.15); border-radius: 16px; padding: 16px 28px;
+}
+#hud-center.dnf {
+  font-size: 22px; color: #ff8a1f;
+  background: rgba(10,13,20,0.8); border: 1px solid rgba(255,138,31,0.4); border-radius: 16px; padding: 14px 24px;
 }
 .hud-bottom { position: absolute; left: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
 .hud-speed-row { display: flex; align-items: flex-end; gap: 8px; }

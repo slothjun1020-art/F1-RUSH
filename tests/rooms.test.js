@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Room } from '../server/rooms.js';
 import { getTrack } from '../shared/tracks.js';
 import { createCar, stepCar } from '../shared/physics.js';
-import { pointAt } from '../shared/track-geom.js';
+import { pointAt, KERB_W } from '../shared/track-geom.js';
 import { botInput } from '../shared/bot.js';
 
 function setup(laps = 5) {
@@ -520,4 +520,161 @@ test('finishing a race and returning to the lobby reflects the newly set record'
   const top5 = a.last('room').top5;
   assert.equal(top5.length, 1);
   assert.equal(top5[0].nick, 'Solo');
+});
+
+// ---- tire wear ------------------------------------------------------------------------------
+
+// Parks a car just off the start line, offset laterally from the centerline by `offset` (world units),
+// and reports that single stationary position. `offset` past track.halfW is the kerb/grass; see physics.js.
+function reportParked(room, clock, p, track, offset) {
+  const a = track.angs[0];
+  const x = track.xs[0] - Math.sin(a) * offset;
+  const y = track.ys[0] + Math.cos(a) * offset;
+  room.handle(p.id, { t: 's', x, y, a, v: 0, ts: clock.t });
+}
+
+test('tire wear is off by default; turning it on resets ready like collisions/gear mode', () => {
+  const { room, join } = setup();
+  const a = join('Host');
+  const b = join('Guest');
+  assert.equal(room.tireWear, false);
+  assert.equal(a.last('room').tireWear, false);
+
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(b.id, { t: 'tirewear', on: true }); // non-host ignored
+  assert.equal(room.tireWear, false);
+  assert.equal(room.players.get(b.id).ready, true, 'ignored toggle does not reset ready');
+
+  room.handle(a.id, { t: 'tirewear', on: true });
+  assert.equal(room.tireWear, true);
+  assert.equal(a.last('room').tireWear, true);
+  assert.equal(room.players.get(b.id).ready, false, 'toggling tire wear resets ready, like the other toggles');
+
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(a.id, { t: 'start' });
+  assert.equal(a.last('go').tireWear, true);
+});
+
+test('tire wear off: sitting in the grass never accumulates wear or causes a DNF', () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt + 60000; // a full minute parked in the grass
+  reportParked(room, clock, a, track, track.halfW + 200);
+  assert.equal(room.players.get(a.id).rs.wear, 0);
+  assert.equal(room.players.get(a.id).rs.dnf, false);
+});
+
+test('tire wear on: sitting in the grass accumulates wear and DNFs at 100%', () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  const off = track.halfW + 200;
+
+  clock.t = room.race.startAt + 10000; // 10s of grass: not enough yet
+  reportParked(room, clock, a, track, off);
+  const rs = room.players.get(a.id).rs;
+  assert.ok(rs.wear > 0 && rs.wear < 1, `wear after 10s: ${rs.wear}`);
+  assert.equal(rs.dnf, false);
+
+  clock.t = room.race.startAt + 30000; // 30s total: comfortably past 100%
+  reportParked(room, clock, a, track, off);
+  assert.equal(room.players.get(a.id).rs.dnf, true);
+  assert.equal(room.players.get(a.id).rs.wear, 1);
+});
+
+test('a wear DNF broadcasts a dnf message and ends a solo race, with the row marked DNF in the results', () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt + 30000;
+  reportParked(room, clock, a, track, track.halfW + 200);
+
+  const dnfMsg = a.last('dnf');
+  assert.ok(dnfMsg);
+  assert.equal(dnfMsg.id, a.id);
+  assert.equal(dnfMsg.nick, 'Solo');
+  assert.equal(dnfMsg.reason, 'wear');
+  assert.equal(room.phase, 'results', 'the only player DNF-ing ends the race, same as finishing would');
+  const row = a.last('results').rows.find((r) => r.id === a.id);
+  assert.equal(row.dnf, true);
+  assert.equal(row.finished, false);
+});
+
+test("one player's wear DNF does not end the race while another is still going", () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Faller'); // host
+  const b = join('Survivor');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(b.id, { t: 'ready', ready: true });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt + 30000;
+  reportParked(room, clock, a, track, track.halfW + 200);
+
+  assert.equal(room.players.get(a.id).rs.dnf, true);
+  assert.equal(room.phase, 'racing', 'the other player is still racing');
+
+  const driveB = makeDriver(room, clock, b, 1);
+  for (let i = 0; i < 20 * 400 && room.phase === 'racing'; i++) {
+    clock.t += 50;
+    driveB();
+    room.tick();
+  }
+  assert.equal(room.phase, 'results');
+  const rows = a.last('results').rows;
+  assert.equal(rows.find((r) => r.id === b.id).finished, true);
+  assert.equal(rows.find((r) => r.id === a.id).dnf, true);
+});
+
+test('kerb wear accumulates slower than grass wear over the same time', () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt + 5000;
+  reportParked(room, clock, a, track, track.halfW + KERB_W / 2);
+  const kerbWear = room.players.get(a.id).rs.wear;
+  assert.ok(kerbWear > 0 && kerbWear < 1);
+
+  const second = setup(1);
+  const c = second.join('Solo2');
+  second.room.handle(c.id, { t: 'tirewear', on: true });
+  second.room.handle(c.id, { t: 'track', id: 'redbullring' });
+  second.room.handle(c.id, { t: 'start' });
+  second.clock.t = second.room.race.startAt + 5000;
+  reportParked(second.room, second.clock, c, track, track.halfW + KERB_W + 50);
+  const grassWear = second.room.players.get(c.id).rs.wear;
+
+  assert.ok(grassWear > kerbWear, `grass ${grassWear} should wear faster than kerb ${kerbWear}`);
+});
+
+test("once DNF'd, further state reports from that player are ignored", () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt + 30000;
+  reportParked(room, clock, a, track, track.halfW + 200);
+  assert.equal(room.players.get(a.id).rs.dnf, true);
+  const totalAfterDnf = room.players.get(a.id).rs.prog.total;
+
+  // Try to report a normal on-track position afterwards — should be a no-op.
+  clock.t += 1000;
+  const p = pointAt(track, 5000);
+  room.handle(a.id, { t: 's', x: p.x, y: p.y, a: p.a, v: 200, ts: clock.t });
+  assert.equal(room.players.get(a.id).rs.prog.total, totalAfterDnf);
 });

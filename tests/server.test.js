@@ -26,7 +26,7 @@ async function connect(port) {
 }
 
 test('websocket smoke: create, join, ready, start, clock ping', async () => {
-  const game = createGameServer();
+  const game = await createGameServer();
   await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
   const { port } = game.server.address();
   try {
@@ -70,7 +70,7 @@ test('websocket smoke: create, join, ready, start, clock ping', async () => {
 });
 
 test('low-latency socket options: Nagle is disabled and permessage-deflate is off', async () => {
-  const game = createGameServer();
+  const game = await createGameServer();
   await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
   const { port } = game.server.address();
   try {

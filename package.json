@@ -12,12 +12,14 @@
     "e2e:fallback": "node scripts/e2e-fallback.mjs",
     "e2e:features": "node scripts/e2e-features.mjs",
     "e2e:ghost": "node scripts/e2e-ghost.mjs",
-    "e2e:leaderboard": "node scripts/e2e-leaderboard.mjs"
+    "e2e:leaderboard": "node scripts/e2e-leaderboard.mjs",
+    "e2e:tirewear": "node scripts/e2e-tirewear.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@upstash/redis": "^1.39.0",
     "express": "^5.2.1",
     "three": "^0.186.0",
     "ws": "^8.21.3"

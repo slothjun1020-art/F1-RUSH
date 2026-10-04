@@ -1,7 +1,7 @@
 // Arcade car model. Cars run in the browser only; the server never simulates them,
 // it just checks the reported positions (see race.js and server/rooms.js).
 
-import { locate, BARRIER } from './track-geom.js';
+import { locate, BARRIER, KERB_W } from './track-geom.js';
 import { SPEED_SCALE } from './scale.js';
 
 // Speeds, accelerations and distances are in world units and follow SPEED_SCALE (shared/scale.js) so a
@@ -56,13 +56,33 @@ export const CAR = {
   // gentle at first and never a hard cut).
   gearLugMin: 0.35,
   gearOverBrakeRate: 1.5,
+
+  // Tire wear (room setting; off by default — see server/rooms.js). Starting values picked from feel,
+  // not measurement: fully off the track (grass) wears a tire out in well under a minute of continuous
+  // contact; riding a kerb is far more forgiving, since real drivers use them on purpose. Both are plain
+  // fractions of tire life per second, so tune by feel — 1 / wearGrassRate is roughly "seconds of
+  // continuous grass to pop the tire".
+  wearGrassRate: 0.04,   // 100% in ~25s of continuous grass contact
+  wearKerbRate: 0.01,    // 100% in ~100s of continuous kerb contact
+  wearAccelFloor: 0.35,  // acceleration multiplier remaining at 100% wear — hobbled, never fully stuck
 };
 
 export function createCar(x, y, a, track) {
   const loc = locate(track, x, y);
   return {
-    x, y, a, v: 0, seg: loc.seg, dist: loc.dist, brakeHold: 0, coastHold: 0,
+    x, y, a, v: 0, seg: loc.seg, dist: loc.dist, brakeHold: 0, coastHold: 0, wear: 0,
   };
+}
+
+// How fast tires wear per second at this distance from the centerline: 0 on the asphalt proper, a gentle
+// CAR.wearKerbRate on the kerb band, and the harsher CAR.wearGrassRate beyond it. Shared so the server
+// (server/rooms.js, deciding DNF authoritatively from reported positions) and the client (stepCar below,
+// for the live acceleration penalty and HUD gauge) always agree on where the zones are.
+export function wearRate(dist, track) {
+  const beyond = dist - track.halfW;
+  if (beyond <= 0) return 0;
+  if (beyond <= KERB_W) return CAR.wearKerbRate;
+  return CAR.wearGrassRate;
 }
 
 // input: { throttle: 0..1, brake: 0..1, steer: -1..1 (negative = left) }
@@ -70,7 +90,7 @@ export function createCar(x, y, a, track) {
 // before gears existed). With a gear: using a gear too tall for the current speed ("lugging") weakens
 // acceleration, and going faster than the gear's own top speed (too low a gear) gently engine-brakes
 // back down toward it — but shifting itself is never blocked; the gear only ever affects the physics.
-export function stepCar(car, input, dt, track, gear = null) {
+export function stepCar(car, input, dt, track, gear = null, tireWear = false) {
   const gearCap = gear ? GEAR_SPEEDS[gear - 1] : null;
   const localMax = gearCap != null ? Math.min(gearCap, CAR.maxSpeed) : CAR.maxSpeed;
   const off = car.dist > track.halfW;
@@ -88,6 +108,7 @@ export function stepCar(car, input, dt, track, gear = null) {
       const bandLow = GEAR_SPEEDS[gear - 2]; // the gear below's cap: the ideal minimum speed for this gear
       if (v < bandLow) mul *= Math.max(CAR.gearLugMin, v / bandLow); // lugging: weak accel under the band
     }
+    if (tireWear) mul *= 1 - (car.wear ?? 0) * (1 - CAR.wearAccelFloor);
     v += CAR.accel * mul * input.throttle * dt;
   }
 
@@ -153,5 +174,7 @@ export function stepCar(car, input, dt, track, gear = null) {
     car.dist = limit;
     car.v *= Math.pow(0.02, dt);
   }
+
+  if (tireWear) car.wear = Math.min(1, (car.wear ?? 0) + wearRate(car.dist, track) * dt);
   return car;
 }

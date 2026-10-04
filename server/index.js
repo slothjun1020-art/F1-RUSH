@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import { Redis } from '@upstash/redis';
 import { Room } from './rooms.js';
 import { GhostStore } from './ghosts.js';
 import {
@@ -11,10 +12,18 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export function createGameServer({
-  now = Date.now, laps, ghostsPath = path.join(root, 'data', 'ghosts.json'),
-} = {}) {
-  const ghosts = new GhostStore({ filePath: ghostsPath });
+// Best-lap records live in Upstash Redis (see server/ghosts.js) so they survive Render's free plan,
+// which has no persistent disk — a local file would vanish on every redeploy or cold start. Set
+// UPSTASH_REDIS_REST_URL/UPSTASH_REDIS_REST_TOKEN (from a free upstash.com database) to enable it; with
+// neither set (e.g. plain local dev), ghosts just aren't persisted — Room already handles a missing store.
+export async function createGameServer({ now = Date.now, laps, ghosts } = {}) {
+  let ghostStore = ghosts;
+  if (!ghostStore) {
+    const url = process.env.UPSTASH_REDIS_REST_URL;
+    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    if (url && token) ghostStore = new GhostStore({ redis: new Redis({ url, token }) });
+  }
+  if (ghostStore) await ghostStore.load();
   const app = express();
   app.disable('x-powered-by');
   app.get('/healthz', (_req, res) => res.type('text').send('ok'));
@@ -44,7 +53,7 @@ export function createGameServer({
   function createRoom() {
     const code = newCode();
     const room = new Room({
-      code, now, laps, ghosts, onEmpty: () => rooms.delete(code),
+      code, now, laps, ghosts: ghostStore, onEmpty: () => rooms.delete(code),
     });
     rooms.set(code, room);
     return room;
@@ -116,7 +125,7 @@ export function createGameServer({
   return {
     server,
     rooms,
-    ghosts,
+    ghosts: ghostStore,
     close() {
       clearInterval(snapTimer);
       clearInterval(beatTimer);
@@ -129,7 +138,7 @@ export function createGameServer({
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 3000;
-  const game = createGameServer();
+  const game = await createGameServer();
   game.server.listen(port, () => {
     console.log(`F1 Race server running: http://localhost:${port}`);
   });

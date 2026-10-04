@@ -2,14 +2,21 @@
 // and drive the player's car through real keyboard events using the bot from shared/bot.js.
 
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import puppeteer from 'puppeteer-core';
+import { GhostStore } from '../server/ghosts.js';
 
-// A fresh, isolated ghost-records file for a test server, so finishing a race in one script run never
-// writes to (or is affected by) the real repo's data/ghosts.json or another script's run.
-export function tmpGhostsPath() {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'f1-ghosts-')), 'ghosts.json');
+// A fresh, isolated ghost store for a test server, backed by an in-memory fake instead of the real
+// Upstash Redis the production server uses — so finishing a race in one script run never writes to (or
+// is affected by) real best-lap data or another script's run, and tests need no real Upstash account.
+function fakeRedisClient() {
+  const store = new Map();
+  return {
+    async get(key) { return store.has(key) ? store.get(key) : null; },
+    async set(key, value) { store.set(key, value); return 'OK'; },
+  };
+}
+export function fakeGhostsStore() {
+  return new GhostStore({ redis: fakeRedisClient() });
 }
 
 export function findChrome() {

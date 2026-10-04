@@ -6,10 +6,10 @@
 
 import { createGameServer } from '../server/index.js';
 import {
-  launchBrowser, drive, sleep, tmpGhostsPath,
+  launchBrowser, drive, sleep, fakeGhostsStore,
 } from './browser-helpers.mjs';
 
-const game = createGameServer({ laps: 1, ghostsPath: tmpGhostsPath() });
+const game = await createGameServer({ laps: 1, ghosts: fakeGhostsStore() });
 await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${game.server.address().port}`;
 const browser = await launchBrowser();

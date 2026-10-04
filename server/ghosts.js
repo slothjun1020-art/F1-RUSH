@@ -3,40 +3,46 @@
 // entry carries a ~100ms-spaced position trail — it's the only one ever replayed as a ghost car; the rest
 // are nickname + time for the lobby leaderboard (see server/rooms.js, which records candidate laps during
 // a race and reads this back, and public/ghost.js, which replays the trail). Independent of the
-// room/network layer, like rooms.js, so it can be unit-tested with a throwaway file.
+// room/network layer, like rooms.js, so it can be unit-tested with a fake in-memory Redis client.
+//
+// Persisted to a single Upstash Redis key (one small JSON blob, not a key per track) rather than a local
+// file: Render's free plan has no persistent disk, so anything written to the filesystem is gone on the
+// next deploy or cold start. Reads (get/top5) stay synchronous off an in-memory cache — Room calls those
+// many times a second (every broadcast), and a network round trip there would be both slow and pointless
+// (the cache is always the latest state this process itself wrote). Only load() and the save triggered by
+// maybeUpdate() touch the network.
 
-import fs from 'node:fs';
-import path from 'node:path';
-
+const REDIS_KEY = 'f1rush:ghosts';
 const TOP_N = 5;
 
 export class GhostStore {
-  constructor({ filePath }) {
-    this.filePath = filePath;
+  constructor({ redis }) {
+    this.redis = redis; // minimal interface: async get(key) and async set(key, value)
     this.records = new Map(); // trackId -> [{ nick, time, path? }, ...] sorted fastest-first, length <= TOP_N
-    this.load();
   }
 
-  load() {
+  // Must be awaited once (server/index.js does this at startup) before get()/top5() reflect anything
+  // written in a previous run. Safe to call again later; it just re-populates the in-memory cache.
+  async load() {
     let raw;
     try {
-      raw = fs.readFileSync(this.filePath, 'utf8');
-    } catch {
-      return; // no file yet (first run, or it was deleted) — start empty
+      raw = await this.redis.get(REDIS_KEY);
+    } catch (err) {
+      console.warn('ghost store: failed to load from Redis, starting empty:', err.message);
+      return;
     }
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        for (const [trackId, value] of Object.entries(parsed)) {
-          // Older files stored one record per track directly (not yet wrapped in a list); treat that as
-          // a one-entry top list rather than discarding it.
-          const list = Array.isArray(value) ? value : [value];
-          const valid = list.filter(isValidEntry).slice(0, TOP_N);
-          if (valid.length) this.records.set(trackId, valid);
-        }
-      }
-    } catch {
-      // Corrupt file: start empty rather than crash the server over stale data.
+    if (!raw) return; // key doesn't exist yet (first run ever)
+    let parsed = raw;
+    if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw); } catch { return; } // corrupt value: start empty, don't crash
+    }
+    if (!parsed || typeof parsed !== 'object') return;
+    for (const [trackId, value] of Object.entries(parsed)) {
+      // Older data stored one record per track directly (not yet wrapped in a list); treat that as a
+      // one-entry top list rather than discarding it.
+      const list = Array.isArray(value) ? value : [value];
+      const valid = list.filter(isValidEntry).slice(0, TOP_N);
+      if (valid.length) this.records.set(trackId, valid);
     }
   }
 
@@ -52,8 +58,10 @@ export class GhostStore {
 
   // Inserts or improves this nick's entry (one slot per nickname — the only "same person" signal this
   // app has, since there's no login), re-sorts, caps at TOP_N, and keeps the replay path only on whatever
-  // ends up fastest. Persists to disk on any change. Returns true if the stored data changed.
-  maybeUpdate(trackId, { nick, time, path: points }) {
+  // ends up fastest. Persists to Redis on any change. Returns true if the stored data changed. Callers in
+  // rooms.js don't await this (the readable-synchronously cache above is updated immediately either way)
+  // — it's async only so the Redis write can be awaited by tests that need the write to have landed.
+  async maybeUpdate(trackId, { nick, time, path: points }) {
     if (!points.length) return false;
     const list = this.records.get(trackId) ?? [];
     const existing = list.find((r) => r.nick === nick);
@@ -64,18 +72,17 @@ export class GhostStore {
     next.length = Math.min(next.length, TOP_N);
     next.forEach((r, i) => { if (i > 0) delete r.path; });
     this.records.set(trackId, next);
-    this.save();
+    await this.save();
     return true;
   }
 
-  save() {
+  async save() {
     const out = {};
     for (const [trackId, list] of this.records) out[trackId] = list;
     try {
-      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-      fs.writeFileSync(this.filePath, JSON.stringify(out));
+      await this.redis.set(REDIS_KEY, JSON.stringify(out));
     } catch (err) {
-      console.warn('ghost store: failed to save', err.message);
+      console.warn('ghost store: failed to save to Redis:', err.message);
     }
   }
 }

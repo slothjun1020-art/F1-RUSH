@@ -17,6 +17,11 @@ import { ghostPoseAt } from './ghost.js';
 
 const SHIFT_LIGHT_RATIO = 0.92; // "too fast for this gear" cue once past this fraction of its top speed
 
+// Tire-wear gauge color stops (green -> yellow -> orange -> red), in CSS classes toggled on #tire-icon.
+const WEAR_COLOR_STOPS = [
+  [0.33, 'w-ok'], [0.66, 'w-warn'], [0.9, 'w-high'], [Infinity, 'w-crit'],
+];
+
 // The recorded lap started mid-race at whatever speed the driver already had, not from a standing start,
 // so replaying it from the green light makes the ghost look like it launches instantly. Holding it at its
 // first point for a beat (the real car is still off the line accelerating anyway) reads much more natural.
@@ -39,8 +44,8 @@ export function formatTime(ms) {
 
 export class RaceView {
   constructor({
-    renderer, hud, net, track, laps, startAt, grid, meId, players, onLap, onReset,
-    gearMode = false, collisions = false, debug = false, ghost = null,
+    renderer, hud, net, track, laps, startAt, grid, meId, players, onLap, onReset, onDnf,
+    gearMode = false, collisions = false, tireWear = false, debug = false, ghost = null,
   }) {
     this.renderer = renderer;
     this.hud = hud;
@@ -55,9 +60,17 @@ export class RaceView {
     this.players = new Map(players.map((p) => [p.id, p]));
     this.onLap = onLap;
     this.onReset = onReset;
+    this.onDnf = onDnf;
     this.gearMode = gearMode;
     this.collisions = collisions;
+    this.tireWear = tireWear;
     this.gear = 1;
+    // Tire wear (room setting; see server/rooms.js). dnfIds covers every DNF'd player still in the room
+    // (this.gone, below, is the separate "left the room entirely" case). spectateId is which other car's
+    // viewpoint a DNF'd local player has chosen to watch, picked by clicking their row on the leaderboard.
+    this.dnf = false;
+    this.dnfIds = new Set();
+    this.spectateId = null;
     // The best-lap ghost (solo races only, see server/rooms.js and public/ghost.js). Its label is built
     // once here rather than every frame — it never changes while this race is running.
     this.ghost = ghost;
@@ -151,6 +164,21 @@ export class RaceView {
     }
   }
 
+  // Tire wear hit 100% for someone (server/rooms.js's dnfPlayer — always carries reason: 'wear' for now).
+  // Unlike handleLeft, this player stays in this.players and keeps rendering (frozen where they wore out)
+  // — they just stop driving, and if it's the local player, can spectate anyone else from the leaderboard.
+  handleDnf(msg) {
+    this.dnfIds.add(msg.id);
+    if (msg.id === this.meId) this.dnf = true;
+    this.onDnf?.(msg.nick);
+  }
+
+  // Called by the HUD leaderboard click handler (drawHud) once DNF'd. Spectating yourself or an unknown
+  // id just clears the selection back to the default (your own, now-stationary, car).
+  spectate(id) {
+    this.spectateId = id === this.meId ? null : id;
+  }
+
   respawn() {
     const loc = locate(this.track, this.car.x, this.car.y, this.car.seg, 30);
     const p = pointAt(this.track, loc.s);
@@ -183,11 +211,12 @@ export class RaceView {
     const reset = consumeReset();
     const shift = consumeGearShift();
     let drive = { throttle: 0, brake: 0, steer: 0 };
-    if (started && !this.finished) {
+    if (started && !this.finished && !this.dnf) {
       drive = input;
       if (reset) this.respawn();
-    } else if (this.finished) {
-      // Roll to a stop past the line; braking below zero speed would reverse the car back over it.
+    } else if (this.finished || this.dnf) {
+      // Roll to a stop past the line (or wherever the tires gave out); braking below zero speed would
+      // reverse the car back over it.
       drive = { throttle: 0, brake: car.v > 5 ? 0.35 : 0, steer: 0 };
     }
 
@@ -195,7 +224,7 @@ export class RaceView {
     // is harmless since the car isn't moving yet, and it means a shift pressed a moment early isn't lost.
     // Shifting itself is never refused — any gear at any speed — only the physics (stepCar's lugging and
     // engine-braking) makes a mismatched gear cost you something.
-    if (this.gearMode && !this.finished) {
+    if (this.gearMode && !this.finished && !this.dnf) {
       if (shift.up && this.gear < 8) this.gear++;
       if (shift.down && this.gear > 1) this.gear--;
     }
@@ -205,10 +234,10 @@ export class RaceView {
       let rem = dt;
       while (rem > 1e-6) {
         const h = Math.min(rem, 1 / 60);
-        stepCar(car, drive, h, track, gear);
+        stepCar(car, drive, h, track, gear, this.tireWear);
         rem -= h;
       }
-      if (this.collisions && !this.finished) {
+      if (this.collisions && !this.finished && !this.dnf) {
         const others = [];
         for (const [id, r] of this.remotes) {
           if (!this.players.has(id)) continue;
@@ -225,7 +254,7 @@ export class RaceView {
     }
 
     const done = lapsCompleted(track, this.prog);
-    while (this.lapsDone < done && !this.finished) {
+    while (this.lapsDone < done && !this.finished && !this.dnf) {
       this.lapsDone++;
       const ms = sn - this.lapStart;
       this.lapStart = sn;
@@ -240,7 +269,7 @@ export class RaceView {
     // Keep reporting after crossing the line locally: the server needs a position beyond it to confirm the finish.
     // Fields are kept small (whole units, 2-decimal heading) because SEND_HZ sends this several times a
     // second over what may be a tunnelled connection — see shared/protocol.js.
-    if (started && !this.official && sn - this.lastSend >= SEND_EVERY) {
+    if (started && !this.official && !this.dnf && sn - this.lastSend >= SEND_EVERY) {
       this.lastSend = sn;
       this.net.send({ t: 's', x: r1(car.x), y: r1(car.y), a: Math.round(car.a * 100) / 100, v: Math.round(car.v), ts: Math.round(sn) });
     } else if (!started && sn - this.lastSend >= 500) {
@@ -275,8 +304,30 @@ export class RaceView {
       const pose = ghostPoseAt(this.ghost.path, elapsed);
       if (pose) ghost = { x: pose.x, y: pose.y, a: pose.a, label: this.ghostLabel };
     }
+
+    // Spectating (DNF'd locally, watching someone else — see spectate()/drawHud's leaderboard clicks):
+    // swap which car the camera follows and who counts as "me" for the 3D view only. The HUD/minimap
+    // below stay keyed to the local player's own (now stationary) car and race result either way.
+    let renderCar = this.car;
+    let renderMe = this.players.get(this.meId);
+    let renderOthers = others;
+    if (this.dnf && this.spectateId != null) {
+      const target = others.find((o) => o.id === this.spectateId);
+      if (target) {
+        const dist = locate(this.track, target.x, target.y).dist;
+        renderCar = {
+          x: target.x, y: target.y, a: target.a, v: 0, dist, seg: this.car.seg,
+        };
+        renderMe = this.players.get(this.spectateId);
+        const mine = this.players.get(this.meId);
+        renderOthers = others.filter((o) => o.id !== this.spectateId);
+        if (mine) renderOthers = [...renderOthers, {
+          id: this.meId, x: this.car.x, y: this.car.y, a: this.car.a, color: mine.color, nick: mine.nick,
+        }];
+      }
+    }
     this.renderer.render({
-      dt, sn, track: this.track, car: this.car, me: this.players.get(this.meId), others, ghost,
+      dt, sn, track: this.track, car: renderCar, me: renderMe, others: renderOthers, ghost,
     });
     this.drawHud(sn, others, ghost);
   }
@@ -299,7 +350,9 @@ export class RaceView {
     const rows = [];
     for (const [id, info] of this.players) {
       const total = id === this.meId ? this.prog.total : this.remotes.get(id)?.tot ?? -1e9;
-      rows.push({ id, nick: info.nick, color: info.color, total, place: this.finPlaces.get(id) ?? null, dnf: false });
+      rows.push({
+        id, nick: info.nick, color: info.color, total, place: this.finPlaces.get(id) ?? null, dnf: this.dnfIds.has(id),
+      });
     }
     for (const [id, g] of this.gone) {
       if (this.players.has(id)) continue;
@@ -340,16 +393,28 @@ export class RaceView {
       if (this.text.gearCls !== gearCls) { this.text.gearCls = gearCls; hud.gear.num.className = gearCls; }
     }
 
+    if (this.tireWear && hud.tire) {
+      const wear = this.car.wear ?? 0;
+      this.setText('tirePct', hud.tire.pct, `${Math.round(wear * 100)}%`);
+      const stop = (WEAR_COLOR_STOPS.find(([t]) => wear <= t) ?? WEAR_COLOR_STOPS.at(-1))[1];
+      if (this.text.tireCls !== stop) { this.text.tireCls = stop; hud.tire.icon.className = `tire-icon ${stop}`; }
+    }
+
     const rows = this.ranking();
     const myPos = rows.findIndex((r) => r.id === this.meId) + 1;
     this.setText('pos', hud.pos, `${myPos}/${rows.filter((r) => !r.dnf).length}`); // DNFs are out of the count
 
-    const key = rows.map((r) => `${r.id}:${Math.floor(Math.max(0, r.total) / track.L)}:${r.place ?? ''}:${r.dnf ? 'x' : ''}`).join('|');
+    // Clickable (to pick who to spectate) only once the local player has DNF'd — see spectate().
+    hud.board.classList.toggle('spectate-mode', this.dnf);
+
+    const key = `${this.dnf}:${this.spectateId}:${rows.map((r) => `${r.id}:${Math.floor(Math.max(0, r.total) / track.L)}:${r.place ?? ''}:${r.dnf ? 'x' : ''}`).join('|')}`;
     if (key !== this.boardKey) {
       this.boardKey = key;
       hud.board.replaceChildren(...rows.map((r, i) => {
         const li = document.createElement('li');
-        li.className = r.id === this.meId ? 'me' : r.dnf ? 'dnf' : '';
+        const isSelf = r.id === this.meId;
+        li.className = [isSelf && 'me', r.dnf && 'dnf', r.id === this.spectateId && 'spectating'].filter(Boolean).join(' ');
+        if (this.dnf && !isSelf) li.onclick = () => this.spectate(r.id);
         const pos = document.createElement('span');
         pos.className = 'pos';
         pos.textContent = r.dnf ? '–' : String(i + 1);
@@ -381,6 +446,9 @@ export class RaceView {
       const p = this.official?.place;
       center = p ? `🏁 ${p}위 완주!  ${formatTime(this.finishMs)}` : `🏁 완주!  ${formatTime(this.finishMs)}\n순위 확인 중…`;
       cls = 'finish';
+    } else if (this.dnf) {
+      center = '🛞 타이어 마모로 탈락했어요\n순위표를 눌러 다른 선수를 관전하세요';
+      cls = 'dnf';
     } else {
       const ang = track.angs[this.car.seg];
       if (Math.abs(norm(this.car.a - ang)) > 2.2 && this.car.v > 60) { center = '역주행!'; cls = 'warn'; }

@@ -4,9 +4,9 @@
 
 import puppeteer from 'puppeteer-core';
 import { createGameServer } from '../server/index.js';
-import { findChrome } from './browser-helpers.mjs';
+import { findChrome, fakeGhostsStore } from './browser-helpers.mjs';
 
-const game = createGameServer({ laps: 1 });
+const game = await createGameServer({ laps: 1, ghosts: fakeGhostsStore() });
 await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${game.server.address().port}`;
 const browser = await puppeteer.launch({

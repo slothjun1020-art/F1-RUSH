@@ -7,7 +7,7 @@ import {
 } from '../shared/protocol.js';
 import { getTrack } from '../shared/tracks.js';
 import { createProgress, advanceProgress, gridSlot } from '../shared/race.js';
-import { CAR } from '../shared/physics.js';
+import { CAR, wearRate } from '../shared/physics.js';
 import { SPEED_SCALE } from '../shared/scale.js';
 
 // Fastest a car can legitimately advance, with headroom for network jitter (follows the world scale).
@@ -36,6 +36,7 @@ export class Room {
     this.trackId = 'monza';
     this.collisions = false; // bumper-car style pushback between cars; off = the old ghost (pass-through) cars
     this.gearMode = false;   // 8-speed semi-automatic sequential gearbox; off = today's automatic model
+    this.tireWear = false;   // grass/kerb tire wear with an accel penalty and a 100%-wear DNF; off = no wear at all
     this.phase = 'lobby'; // lobby | racing | results
     this.race = null;
     this.nextId = 1;
@@ -125,6 +126,13 @@ export class Room {
           this.broadcastRoom();
         }
         break;
+      case 'tirewear':
+        if (id === this.hostId && this.phase === 'lobby') {
+          this.tireWear = !!msg.on;
+          for (const q of this.players.values()) q.ready = false;
+          this.broadcastRoom();
+        }
+        break;
       case 'ready':
         if (this.phase === 'lobby') {
           p.ready = !!msg.ready;
@@ -172,6 +180,10 @@ export class Room {
         lapSamples: [[0, Math.round(g.x), Math.round(g.y), Math.round(g.a * 100) / 100]],
         lastSampleT: startAt,
         bestLapInRace: null,
+        // Tire wear (see onState below). wear is 0..1, computed purely from reported positions — the
+        // server stays the sole authority on when a DNF actually happens, same as lap counting.
+        wear: 0,
+        dnf: false,
       };
     }
     this.phase = 'racing';
@@ -181,13 +193,13 @@ export class Room {
     const ghostRecord = this.players.size === 1 ? this.ghosts.get(this.trackId) : null;
     this.broadcast({
       t: 'go', track: this.trackId, laps: this.laps, startAt, serverNow: this.now(), grid,
-      collisions: this.collisions, gearMode: this.gearMode,
+      collisions: this.collisions, gearMode: this.gearMode, tireWear: this.tireWear,
       ghost: ghostRecord ? { nick: ghostRecord.nick, time: ghostRecord.time, path: ghostRecord.path } : undefined,
     });
   }
 
   onState(p, msg) {
-    if (this.phase !== 'racing' || !p.rs || p.rs.finished) return;
+    if (this.phase !== 'racing' || !p.rs || p.rs.finished || p.rs.dnf) return;
     if (![msg.x, msg.y, msg.a, msg.v].every((n) => isFiniteNum(n))) return;
     const { track, startAt } = this.race;
     const rs = p.rs;
@@ -210,6 +222,11 @@ export class Room {
     }
     const prevT = rs.lastT;
     rs.lastT = t;
+
+    if (this.tireWear) {
+      rs.wear = Math.min(1, rs.wear + wearRate(dist, track) * dt);
+      if (rs.wear >= 1) { this.dnfPlayer(p, t); return; }
+    }
 
     const lapsNow = Math.max(0, Math.floor(rs.prog.total / track.L));
     while (rs.lapsDone < lapsNow && !rs.finished) {
@@ -259,10 +276,21 @@ export class Room {
     this.checkRaceEnd();
   }
 
+  // Tire wear reached 100% (tireWear room setting only — see onState). The player stays connected and in
+  // this.players (unlike leaving), so they keep seeing the race — just unable to drive any further, and
+  // free to spectate another car — while everyone else is told why they dropped out.
+  dnfPlayer(p, t) {
+    const rs = p.rs;
+    rs.dnf = true;
+    rs.dnfTime = t - this.race.startAt;
+    this.broadcast({ t: 'dnf', id: p.id, nick: p.nick, reason: 'wear' });
+    this.checkRaceEnd();
+  }
+
   checkRaceEnd() {
     if (this.phase !== 'racing') return;
     const all = [...this.players.values()];
-    if (all.every((p) => !p.rs || p.rs.finished)) this.finishRace();
+    if (all.every((p) => !p.rs || p.rs.finished || p.rs.dnf)) this.finishRace();
   }
 
   tick() {
@@ -295,6 +323,7 @@ export class Room {
       nick: p.nick,
       color: p.color,
       finished: p.rs.finished,
+      dnf: !!p.rs.dnf, // tire-wear DNF specifically — see dnfPlayer(). Leaving the room is tracked separately (this.race.leavers).
       time: p.rs.finished ? Math.round(p.rs.finishTime) : null,
       best: p.rs.lapTimes.length ? Math.round(Math.min(...p.rs.lapTimes)) : null,
       total: p.rs.prog.total,
@@ -329,6 +358,7 @@ export class Room {
       track: this.trackId,
       collisions: this.collisions,
       gearMode: this.gearMode,
+      tireWear: this.tireWear,
       phase: this.phase,
       laps: this.laps,
       players: [...this.players.values()].map((p) => ({

@@ -12,3 +12,13 @@ services:
     startCommand: npm start
     healthCheckPath: /healthz  # server/index.js already serves this; Render uses it to know the app is up
     autoDeploy: true           # redeploy automatically whenever you push to `branch`
+    envVars:
+      # Best-lap records (server/ghosts.js) live in Upstash Redis, not a local file — this plan has no
+      # persistent disk, so anything written to disk is gone on the next deploy or cold start. Create a
+      # free database at upstash.com and paste its REST URL/token here (Render dashboard -> this service
+      # -> Environment); `sync: false` just means Render won't ask you to commit the values to this file.
+      # Leaving them unset still works, it just means best-lap/ghost data isn't persisted anywhere.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

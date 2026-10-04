@@ -19,6 +19,7 @@ const hud = {
   board: $('hud-board'), center: $('hud-center'), minimap: $('minimap'),
   dbg: { ping: $('dbg-ping'), fps: $('dbg-fps') },
   gear: { root: $('hud-gear'), num: $('hud-gear-num') },
+  tire: { root: $('hud-tire'), icon: $('tire-icon'), pct: $('tire-pct') },
 };
 
 // Small corner overlay of ping and frame rate, only with ?debug=1 in the address (the separate ?debug
@@ -113,7 +114,7 @@ function preventFocusRetention(b) {
 }
 for (const id of [
   'btn-reset', 'btn-quit', 'btn-start', 'btn-ready', 'btn-back', 'btn-leave',
-  'btn-collisions', 'btn-gearmode', 'btn-copy', 'btn-create', 'btn-join',
+  'btn-collisions', 'btn-gearmode', 'btn-tirewear', 'btn-copy', 'btn-create', 'btn-join',
 ]) preventFocusRetention($(id));
 $('btn-reset').onclick = (e) => { requestReset(); e.currentTarget.blur(); };
 $('btn-quit').onclick = (e) => { e.currentTarget.blur(); askToLeave(); };
@@ -225,6 +226,7 @@ function bindNet(n) {
   n.on('snap', (m) => race?.handleSnap(m));
   n.on('fin', onFin);
   n.on('left', onLeft);
+  n.on('dnf', onDnf);
   n.on('results', onResults);
   n.on('err', (m) => {
     if (room) { toast(m.msg); return; }
@@ -268,16 +270,22 @@ async function onGo(m) {
   renderer3d.setTrack(track);
   show('race');
   hud.gear.root.hidden = !m.gearMode;
+  hud.tire.root.hidden = !m.tireWear;
   race = new RaceView({
     renderer: renderer3d, hud, net, track, laps: m.laps, startAt: m.startAt, grid: m.grid, meId, players: room.players,
-    debug: debugHud, gearMode: m.gearMode, collisions: m.collisions, ghost: m.ghost ?? null,
+    debug: debugHud, gearMode: m.gearMode, collisions: m.collisions, tireWear: m.tireWear, ghost: m.ghost ?? null,
     onLap: (n, ms, done) => {
       if (!done) toast(`LAP ${n} 완료  ${formatTime(ms)}`);
     },
     onReset: () => toast('트랙으로 복귀했어요', 1200),
+    onDnf: (nick) => toast(`${nick}님이 타이어 마모로 탈락했어요`, 3800),
   });
   race.start();
   if (m.gearMode) maybeShowGearInfo();
+}
+
+function onDnf(m) {
+  race?.handleDnf(m);
 }
 
 // Someone left (or dropped). During a race they stay on the leaderboard as DNF; if they were the host, say who is now.
@@ -358,7 +366,7 @@ function renderLobby() {
   }
   $('track-hint').textContent = isHost ? '방장이 고를 수 있어요' : '방장이 선택해요';
 
-  for (const [key, id] of [['collisions', 'btn-collisions'], ['gearMode', 'btn-gearmode']]) {
+  for (const [key, id] of [['collisions', 'btn-collisions'], ['gearMode', 'btn-gearmode'], ['tireWear', 'btn-tirewear']]) {
     const btn = $(id);
     const on = !!room[key];
     btn.classList.toggle('on', on);
@@ -411,6 +419,7 @@ $('btn-ready').onclick = () => {
 $('btn-start').onclick = () => net?.send({ t: 'start' });
 $('btn-collisions').onclick = () => net?.send({ t: 'collisions', on: !room?.collisions });
 $('btn-gearmode').onclick = () => net?.send({ t: 'gear', on: !room?.gearMode });
+$('btn-tirewear').onclick = () => net?.send({ t: 'tirewear', on: !room?.tireWear });
 $('btn-copy').onclick = async () => {
   const url = `${location.origin}/?room=${room.code}`;
   try {
@@ -430,7 +439,7 @@ function onResults(m) {
   const body = $('res-table').tBodies[0];
   body.replaceChildren(...m.rows.map((r) => {
     const tr = document.createElement('tr');
-    const dnf = !r.finished && r.left;                 // left mid-race without finishing: no time
+    const dnf = !r.finished && (r.left || r.dnf);       // left mid-race, or tire-wore-out: no time
     tr.className = r.id === meId ? 'me' : dnf ? 'left' : '';
     const cells = [
       dnf ? '–' : r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : String(r.place),
