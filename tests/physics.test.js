@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTrack, KERB_W } from '../shared/track-geom.js';
 import {
-  CAR, createCar, stepCar, GEAR_SPEEDS, worldToKmh, kmhToWorld, wearRate,
+  CAR, createCar, stepCar, GEAR_SPEEDS, worldToKmh, kmhToWorld, wearPerDist,
 } from '../shared/physics.js';
 
 // A very long straight, so braking and coasting tests never touch a corner or the wall.
@@ -261,35 +261,55 @@ function carAt(lateral) {
   return car;
 }
 
-test('tire wear: normal asphalt never accumulates wear', () => {
+const THROTTLE = { throttle: 1, brake: 0, steer: 0 };
+
+test('tire wear: standing still (v=0) in the grass never accumulates wear, no matter how long', () => {
+  const car = carAt(straight.halfW + KERB_W + 50); // grass; NONE never touches the throttle, so v stays 0
+  for (let i = 0; i < 120 * 30; i++) stepCar(car, NONE, DT, straight, null, true); // 30s stationary
+  assert.equal(car.wear, 0, 'no movement means no wear — it tracks distance, not time');
+});
+
+test('tire wear: normal asphalt never accumulates wear even while driving', () => {
   const car = carAt(0);
-  for (let i = 0; i < 300; i++) stepCar(car, NONE, DT, straight, null, true);
+  for (let i = 0; i < 300; i++) stepCar(car, THROTTLE, DT, straight, null, true);
+  assert.ok(car.v > 0, 'sanity check: the car actually moved');
   assert.equal(car.wear, 0);
 });
 
-test('tire wear: grass wears tires faster than the kerb band does', () => {
-  const kerbCar = carAt(straight.halfW + KERB_W / 2);
-  const grassCar = carAt(straight.halfW + KERB_W + 50);
-  for (let i = 0; i < 120; i++) { // 1 second at DT = 1/120
-    stepCar(kerbCar, NONE, DT, straight, null, true);
-    stepCar(grassCar, NONE, DT, straight, null, true);
-  }
-  assert.ok(kerbCar.wear > 0, 'kerb wears tires');
-  assert.ok(grassCar.wear > 0, 'grass wears tires');
-  assert.ok(grassCar.wear > kerbCar.wear, 'grass wears faster than the kerb');
-  assert.ok(Math.abs(kerbCar.wear - CAR.wearKerbRate) < 1e-6, `kerb: ${kerbCar.wear} vs rate ${CAR.wearKerbRate}`);
-  assert.ok(Math.abs(grassCar.wear - CAR.wearGrassRate) < 1e-6, `grass: ${grassCar.wear} vs rate ${CAR.wearGrassRate}`);
+test('tire wear: moving through the grass wears tires in exact proportion to distance covered', () => {
+  const car = carAt(straight.halfW + KERB_W + 50); // grass throughout — steer: 0 keeps it there, see below
+  const startX = car.x;
+  const startY = car.y;
+  for (let i = 0; i < 180; i++) stepCar(car, THROTTLE, DT, straight, null, true);
+  const moved = Math.hypot(car.x - startX, car.y - startY);
+  assert.ok(moved > 0, 'the car actually covered some distance');
+  assert.ok(Math.abs(car.wear - CAR.wearGrassPerDist * moved) < 1e-9,
+    `wear ${car.wear} should equal wearGrassPerDist * distance covered (${CAR.wearGrassPerDist * moved})`);
 });
 
-test('tire wear: disabled (tireWear=false) never accumulates, even off the track', () => {
+test('tire wear: covering more distance in the grass wears more; the kerb wears slower per distance', () => {
+  const half = carAt(straight.halfW + KERB_W + 50);
+  const full = carAt(straight.halfW + KERB_W + 50);
+  const kerb = carAt(straight.halfW + KERB_W / 2);
+  for (let i = 0; i < 60; i++) stepCar(half, THROTTLE, DT, straight, null, true);
+  for (let i = 0; i < 180; i++) {
+    stepCar(full, THROTTLE, DT, straight, null, true);
+    stepCar(kerb, THROTTLE, DT, straight, null, true);
+  }
+  assert.ok(full.wear > half.wear, 'covering more distance in the grass wears more');
+  assert.ok(full.wear > kerb.wear, 'the same distance wears the grass more than the kerb (CAR.wearGrassPerDist > wearKerbPerDist)');
+});
+
+test('tire wear: disabled (tireWear=false) never accumulates, even moving through the grass', () => {
   const car = carAt(straight.halfW + KERB_W + 50);
-  for (let i = 0; i < 300; i++) stepCar(car, NONE, DT, straight, null, false);
+  for (let i = 0; i < 300; i++) stepCar(car, THROTTLE, DT, straight, null, false);
+  assert.ok(car.v > 0, 'sanity check: the car actually moved');
   assert.equal(car.wear, 0);
 });
 
 test('tire wear: caps at 1 (100%), never overshoots', () => {
   const car = carAt(straight.halfW + KERB_W + 50);
-  for (let i = 0; i < 120 * 60; i++) stepCar(car, NONE, DT, straight, null, true); // 60s of continuous grass
+  for (let i = 0; i < 120 * 60; i++) stepCar(car, THROTTLE, DT, straight, null, true); // 60s of driving through grass
   assert.equal(car.wear, 1);
 });
 
@@ -312,10 +332,10 @@ test('tire wear: the acceleration penalty only applies when tireWear is on', () 
   assert.equal(worn.v, freshRef.v, 'wear is ignored for acceleration when tireWear is off');
 });
 
-test('wearRate(): 0 on the asphalt, the kerb rate on the kerb band, the grass rate beyond it', () => {
-  assert.equal(wearRate(0, straight), 0);
-  assert.equal(wearRate(straight.halfW, straight), 0, 'right at the edge of the asphalt: still 0');
-  assert.equal(wearRate(straight.halfW + 1, straight), CAR.wearKerbRate);
-  assert.equal(wearRate(straight.halfW + KERB_W, straight), CAR.wearKerbRate, 'right at the edge of the kerb: still kerb rate');
-  assert.equal(wearRate(straight.halfW + KERB_W + 1, straight), CAR.wearGrassRate);
+test('wearPerDist(): 0 on the asphalt, the kerb rate on the kerb band, the grass rate beyond it', () => {
+  assert.equal(wearPerDist(0, straight), 0);
+  assert.equal(wearPerDist(straight.halfW, straight), 0, 'right at the edge of the asphalt: still 0');
+  assert.equal(wearPerDist(straight.halfW + 1, straight), CAR.wearKerbPerDist);
+  assert.equal(wearPerDist(straight.halfW + KERB_W, straight), CAR.wearKerbPerDist, 'right at the edge of the kerb: still kerb rate');
+  assert.equal(wearPerDist(straight.halfW + KERB_W + 1, straight), CAR.wearGrassPerDist);
 });

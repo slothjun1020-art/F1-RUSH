@@ -113,8 +113,8 @@ function preventFocusRetention(b) {
   b.addEventListener('mousedown', (e) => e.preventDefault());
 }
 for (const id of [
-  'btn-reset', 'btn-quit', 'btn-start', 'btn-ready', 'btn-back', 'btn-leave',
-  'btn-collisions', 'btn-gearmode', 'btn-tirewear', 'btn-copy', 'btn-create', 'btn-join',
+  'btn-reset', 'btn-cam', 'btn-quit', 'btn-start', 'btn-ready', 'btn-back', 'btn-back-lobby', 'btn-leave',
+  'btn-leave-room', 'btn-collisions', 'btn-gearmode', 'btn-tirewear', 'btn-copy', 'btn-create', 'btn-join',
 ]) preventFocusRetention($(id));
 $('btn-reset').onclick = (e) => { requestReset(); e.currentTarget.blur(); };
 $('btn-quit').onclick = (e) => { e.currentTarget.blur(); askToLeave(); };
@@ -131,8 +131,12 @@ function stopRace() {
   race = null;
 }
 
-// ---- leaving ------------------------------------------------------------
-// "Leaving" means leaving the room: the others see you as DNF, and you go back to the start screen.
+// ---- leaving --------------------------------------------------------------
+// Two different things now share the word "나가기":
+//   - quitRace(): the HUD's in-race "나가기" button. You stay in the room (same as a tire-wear DNF — see
+//     server/rooms.js's quitRace()) and land back in its lobby view; everyone else keeps racing.
+//   - leaveToStart(): "방 나가기" (lobby header) or "나가기" (results screen). You actually leave the
+//     room and go back to the start screen; the others see you as a true departure (onLeft).
 
 function closeConfirm() {
   confirmOpen = false;
@@ -140,6 +144,8 @@ function closeConfirm() {
   document.activeElement?.blur?.();
 }
 
+// Only the in-race HUD button asks for confirmation (you could be mid-lap with a good time going). The
+// results-screen and lobby "나가기"/"방 나가기" buttons call leaveToStart() directly — nothing to lose.
 function askToLeave() {
   if (!race) return;
   if (room?.phase === 'results') { leaveToStart(); return; } // the race is over, nothing to lose
@@ -147,6 +153,16 @@ function askToLeave() {
   clearInput();
   $('confirm').hidden = false;
   $('confirm-no').focus(); // the safe choice has the focus, so a stray Space/Enter keeps you racing
+}
+
+function quitRace() {
+  closeConfirm();
+  closeGearInfo();
+  net?.send({ t: 'quit' });
+  stopRace();
+  show('lobby');
+  renderLobby();
+  toast('레이스에서 나갔어요. 다른 플레이어는 계속 레이스해요', 2600);
 }
 
 function leaveToStart() {
@@ -170,7 +186,7 @@ function leaveToStart() {
 }
 
 $('confirm-no').onclick = closeConfirm;
-$('confirm-yes').onclick = leaveToStart;
+$('confirm-yes').onclick = quitRace;
 
 // ---- start screen -------------------------------------------------------
 
@@ -278,7 +294,15 @@ async function onGo(m) {
       if (!done) toast(`LAP ${n} 완료  ${formatTime(ms)}`);
     },
     onReset: () => toast('트랙으로 복귀했어요', 1200),
-    onDnf: (nick) => toast(`${nick}님이 타이어 마모로 탈락했어요`, 3800),
+    onDnf: (m) => {
+      let text = m.reason === 'left' ? `${m.nick}님이 레이스에서 나갔어요` : `${m.nick}님이 타이어 마모로 탈락했어요`;
+      if (m.hostChanged) {
+        const host = room?.players.find((p) => p.id === m.hostId);
+        if (m.hostId === meId) text += ' · 이제 내가 방장이에요';
+        else if (host) text += ` · ${host.nick} 님이 새 방장이에요`;
+      }
+      toast(text, 3800);
+    },
   });
   race.start();
   if (m.gearMode) maybeShowGearInfo();
@@ -380,12 +404,23 @@ function renderLobby() {
   $('btn-ready').hidden = isHost;
   $('btn-ready').disabled = !inLobby;
   $('btn-ready').textContent = me?.ready ? '준비 취소' : '준비';
-  $('btn-start').hidden = !isHost;
+  $('btn-start').hidden = !isHost || !inLobby;
   $('btn-start').disabled = !inLobby || !allReady;
+  const resultsReady = room.phase === 'results';
+  // Normally "모두 로비로 돌려보내기" is reachable from the results screen's own 방장 버튼 (btn-back).
+  // But a driver who quit mid-race (see quitRace()) is already sitting here in the lobby view while the
+  // race finishes without them — if that was the host, this is their only way back, since they'll never
+  // see the results screen to click its button.
+  $('btn-back-lobby').hidden = !(isHost && resultsReady);
   let hint = '';
-  if (!inLobby) hint = '레이스 결과를 확인 중이에요';
-  else if (isHost) hint = others.length === 0 ? '친구에게 방 코드를 알려 주세요 (혼자서도 연습할 수 있어요)' : allReady ? '' : '모두 준비하면 출발할 수 있어요';
-  else hint = me?.ready ? '방장이 시작하길 기다리는 중…' : '준비 버튼을 눌러 주세요';
+  if (inLobby) {
+    if (isHost) hint = others.length === 0 ? '친구에게 방 코드를 알려 주세요 (혼자서도 연습할 수 있어요)' : allReady ? '' : '모두 준비하면 출발할 수 있어요';
+    else hint = me?.ready ? '방장이 시작하길 기다리는 중…' : '준비 버튼을 눌러 주세요';
+  } else if (resultsReady) {
+    hint = isHost ? '레이스가 끝났어요 — 아래 버튼으로 모두를 로비로 돌려보낼 수 있어요' : '방장이 로비로 돌아가길 기다리는 중…';
+  } else {
+    hint = '다른 플레이어들이 레이스 중이에요';
+  }
   $('lobby-hint').textContent = hint;
 
   renderLeaderboard();
@@ -417,6 +452,8 @@ $('btn-ready').onclick = () => {
   net?.send({ t: 'ready', ready: !me?.ready });
 };
 $('btn-start').onclick = () => net?.send({ t: 'start' });
+$('btn-back-lobby').onclick = () => net?.send({ t: 'lobby' });
+$('btn-leave-room').onclick = leaveToStart;
 $('btn-collisions').onclick = () => net?.send({ t: 'collisions', on: !room?.collisions });
 $('btn-gearmode').onclick = () => net?.send({ t: 'gear', on: !room?.gearMode });
 $('btn-tirewear').onclick = () => net?.send({ t: 'tirewear', on: !room?.tireWear });
@@ -433,6 +470,10 @@ $('btn-copy').onclick = async () => {
 // ---- results ------------------------------------------------------------
 
 function onResults(m) {
+  // A driver who quit mid-race (quitRace()) is already looking at the lobby screen, waiting for this
+  // very race to end — they don't get yanked onto the results screen too; see renderLobby()'s own
+  // "레이스가 끝났어요" hint and "모두 로비로 돌려보내기" button for how they get back to a real lobby.
+  if (!screens.lobby.hidden) return;
   show('results');
   const info = room ? trackList().find((t) => t.id === room.track) : null;
   $('res-track').textContent = info ? `${info.name} · ${m.laps}바퀴` : '';
@@ -499,6 +540,8 @@ async function setupRenderer3d() {
     if (e.key === 'Escape' && confirmOpen) closeConfirm();
     if (e.key === 'Escape' && gearInfoOpen) closeGearInfo();
   });
+  // Same action as the V key, as a button for anyone who'd rather click (or has no keyboard handy).
+  $('btn-cam').onclick = (e) => { e.currentTarget.blur(); cycleCamera(); };
 }
 
 const renderer3dReady = setupRenderer3d();

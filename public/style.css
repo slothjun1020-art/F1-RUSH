@@ -44,6 +44,10 @@ button:hover:not(:disabled) { border-color: #4a5578; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.primary { background: var(--red); border-color: var(--red); color: #fff; }
 button.primary:hover:not(:disabled) { filter: brightness(1.12); border-color: var(--red); }
+/* A "this leaves/ends something" warning tint — the HUD's in-race leave button and the lobby's "방
+   나가기" both use it. */
+button.quit { color: #ffb4ad; border-color: rgba(255, 120, 108, 0.35); }
+button.quit:hover:not(:disabled) { border-color: rgba(255, 120, 108, 0.8); }
 input {
   background: #0f131c; border: 1px solid var(--line); border-radius: 10px;
   padding: 11px 14px; width: 100%;
@@ -94,6 +98,7 @@ label { font-size: 13px; color: var(--muted); margin-bottom: -6px; }
 .leaderboard #lb-empty { margin: 0; }
 #lb-table td:last-child, #lb-table th:last-child { text-align: right; }
 .lobby header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.header-actions { display: flex; align-items: center; gap: 10px; }
 .lobby small { color: var(--muted); font-size: 12px; }
 .code { font-size: 38px; font-weight: 800; letter-spacing: 8px; line-height: 1.1; }
 .cols { display: grid; grid-template-columns: 260px 1fr; gap: 20px; min-height: 0; }
@@ -152,19 +157,26 @@ td .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; 
 
 /* HUD */
 #hud { position: fixed; inset: 0; pointer-events: none; }
-.hud-top { position: absolute; top: 14px; left: 14px; display: flex; gap: 10px; }
+/* Stacks the lap/pos/time row above the tire gauge; align-items: stretch (the flex default) makes the
+   gauge match the row's own width, whatever that happens to be, with no hardcoded width to keep in sync. */
+.hud-topwrap { position: absolute; top: 14px; left: 14px; display: flex; flex-direction: column; gap: 8px; }
+.hud-top { display: flex; gap: 10px; }
 .stat {
   background: rgba(10, 13, 20, 0.72); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;
   padding: 7px 14px; min-width: 96px;
 }
 .stat small { display: block; font-size: 11px; color: var(--muted); }
 .stat b { font-size: 20px; font-variant-numeric: tabular-nums; }
-.tire-gauge { display: flex; align-items: center; gap: 6px; }
-.tire-gauge b { font-size: 18px; }
-/* An oval, like a tire seen edge-on. Color is set by whichever .w-* class drawHud() toggles on it
-   (see game.js's WEAR_COLOR_STOPS): green -> yellow -> orange -> red as wear climbs toward 100%. */
+.tire-gauge {
+  display: flex; align-items: center; gap: 10px; background: rgba(10, 13, 20, 0.72);
+  border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 8px 14px;
+}
+.tire-gauge small { color: var(--muted); font-size: 11px; }
+.tire-gauge b { font-size: 22px; font-variant-numeric: tabular-nums; margin-left: auto; }
+/* A true circle. Color is set by whichever .w-* class drawHud() toggles on it (see game.js's
+   WEAR_COLOR_STOPS): green -> yellow -> orange -> red as wear climbs toward 100%. */
 .tire-icon {
-  width: 16px; height: 26px; border-radius: 50%; flex: none; border: 2px solid rgba(0,0,0,0.4);
+  width: 34px; height: 34px; border-radius: 50%; flex: none; border: 2px solid rgba(0,0,0,0.4);
   background: var(--green); transition: background 0.2s;
 }
 .tire-icon.w-ok { background: var(--green); }
@@ -228,8 +240,7 @@ td .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; 
 }
 .hud-buttons button:hover { border-color: rgba(255,255,255,0.5); }
 .hud-buttons button:active { transform: translateY(1px); }
-.hud-buttons button.quit { padding: 7px 10px; font-size: 12px; color: #ffb4ad; border-color: rgba(255, 120, 108, 0.35); }
-.hud-buttons button.quit:hover { border-color: rgba(255, 120, 108, 0.8); }
+.hud-buttons button.quit { padding: 7px 10px; font-size: 12px; }
 #confirm h2 { margin: 0; font-size: 20px; }
 #confirm .sub { margin: 0 0 6px; }
 #confirm .row button { flex: 1; }
@@ -267,5 +278,6 @@ tr.left td { color: var(--muted); }
   #minimap { width: 150px; height: 110px; }
   .hud-top { flex-wrap: wrap; }
   .stat { min-width: 76px; padding: 5px 10px; }
+  .tire-icon { width: 26px; height: 26px; }
   #hud-board { min-width: 150px; top: 76px; }
 }

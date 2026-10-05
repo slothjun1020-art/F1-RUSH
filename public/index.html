@@ -13,13 +13,16 @@
   <div id="labels" hidden></div>
 
   <div id="hud" hidden>
-    <div class="hud-top">
-      <div class="stat"><small>랩</small><b id="hud-lap">LAP 1/5</b></div>
-      <div class="stat"><small>순위</small><b id="hud-pos">1/1</b></div>
-      <div class="stat"><small>시간</small><b id="hud-time">0:00.000</b></div>
-      <div class="stat" id="hud-tire" hidden>
+    <div class="hud-topwrap">
+      <div class="hud-top">
+        <div class="stat"><small>랩</small><b id="hud-lap">LAP 1/5</b></div>
+        <div class="stat"><small>순위</small><b id="hud-pos">1/1</b></div>
+        <div class="stat"><small>시간</small><b id="hud-time">0:00.000</b></div>
+      </div>
+      <div class="tire-gauge" id="hud-tire" hidden>
         <small>타이어</small>
-        <div class="tire-gauge"><span id="tire-icon" class="tire-icon"></span><b id="tire-pct">0%</b></div>
+        <span id="tire-icon" class="tire-icon"></span>
+        <b id="tire-pct">0%</b>
       </div>
     </div>
     <ol id="hud-board"></ol>
@@ -33,7 +36,8 @@
       </div>
       <div class="hud-buttons">
         <button id="btn-reset" title="차를 트랙 위로 되돌려요 (R)">↺ 리셋 <kbd>R</kbd></button>
-        <button id="btn-quit" class="quit" title="레이스에서 나가기">✕ 나가기</button>
+        <button id="btn-cam" title="시점 전환 (V)">🎥 시점 <kbd>V</kbd></button>
+        <button id="btn-quit" class="quit" title="레이스에서 나가기 (DNF 처리, 방은 유지돼요)">✕ 나가기</button>
       </div>
       <div id="hud-help">↑ 가속 · ↓ 브레이크 · ←→ 조향 · R 리셋 · V 시점 전환</div>
     </div>
@@ -73,7 +77,10 @@
             <small>방 코드</small>
             <div id="lobby-code" class="code"></div>
           </div>
-          <button id="btn-copy">초대 링크 복사</button>
+          <div class="header-actions">
+            <button id="btn-copy">초대 링크 복사</button>
+            <button id="btn-leave-room" class="quit">방 나가기</button>
+          </div>
         </header>
         <div class="cols">
           <div class="col-players">
@@ -99,6 +106,7 @@
         <footer>
           <button id="btn-ready">준비</button>
           <button id="btn-start" class="primary">출발!</button>
+          <button id="btn-back-lobby" class="primary" hidden>모두 로비로 돌려보내기</button>
           <span id="lobby-hint"></span>
         </footer>
       </div>
@@ -148,7 +156,7 @@
   <section id="confirm" class="screen overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
     <div class="card">
       <h2 id="confirm-title">정말 나갈까요?</h2>
-      <p class="sub">나가면 이번 기록이 사라져요</p>
+      <p class="sub">레이스에서 나가면 이번 기록은 DNF로 처리돼요 (방은 그대로 유지돼요)</p>
       <div class="row">
         <button id="confirm-no" class="primary">계속하기</button>
         <button id="confirm-yes">나가기</button>

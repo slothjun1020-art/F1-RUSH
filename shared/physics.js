@@ -57,15 +57,19 @@ export const CAR = {
   gearLugMin: 0.35,
   gearOverBrakeRate: 1.5,
 
-  // Tire wear (room setting; off by default — see server/rooms.js). Starting values picked from feel,
-  // not measurement: fully off the track (grass) wears a tire out in well under a minute of continuous
-  // contact; riding a kerb is far more forgiving, since real drivers use them on purpose. Both are plain
-  // fractions of tire life per second, so tune by feel — 1 / wearGrassRate is roughly "seconds of
-  // continuous grass to pop the tire".
-  wearGrassRate: 0.04,   // 100% in ~25s of continuous grass contact
-  wearKerbRate: 0.01,    // 100% in ~100s of continuous kerb contact
-  wearAccelFloor: 0.35,  // acceleration multiplier remaining at 100% wear — hobbled, never fully stuck
+  // Tire wear (room setting; off by default — see server/rooms.js). Proportional to actual distance
+  // travelled through the grass/kerb zone, never to time spent there — sitting still off-track must
+  // never wear a tire, no matter how long the car sits (see wearPerDist() below). wearGrassPerDist and
+  // wearKerbPerDist are therefore wear-fraction *per world unit of distance moved*, not per second.
+  wearAccelFloor: 0.35, // acceleration multiplier remaining at 100% wear — hobbled, never fully stuck
 };
+
+// Tuned against a car cruising continuously through the grass at the off-track speed cap (CAR.offSpeed):
+// that covers CAR.offSpeed world units per second, so this works out to about 14s of continuous grass
+// running to reach 100% wear — matching the feel of the game's original per-second tuning, just expressed
+// per distance instead. The kerb is 3.5x more forgiving than the grass, same ratio as before.
+CAR.wearGrassPerDist = 1 / (CAR.offSpeed * 14);
+CAR.wearKerbPerDist = CAR.wearGrassPerDist / 3.5;
 
 export function createCar(x, y, a, track) {
   const loc = locate(track, x, y);
@@ -74,15 +78,17 @@ export function createCar(x, y, a, track) {
   };
 }
 
-// How fast tires wear per second at this distance from the centerline: 0 on the asphalt proper, a gentle
-// CAR.wearKerbRate on the kerb band, and the harsher CAR.wearGrassRate beyond it. Shared so the server
-// (server/rooms.js, deciding DNF authoritatively from reported positions) and the client (stepCar below,
-// for the live acceleration penalty and HUD gauge) always agree on where the zones are.
-export function wearRate(dist, track) {
+// How much tires wear per world unit of distance moved at this distance from the centerline: 0 on the
+// asphalt proper, a gentle CAR.wearKerbPerDist on the kerb band, and the harsher CAR.wearGrassPerDist
+// beyond it. Shared so the server (server/rooms.js, deciding DNF authoritatively from reported positions)
+// and the client (stepCar below, for the live acceleration penalty and HUD gauge) always agree on where
+// the zones are. Callers multiply this by distance *moved*, never by elapsed time — standing still off
+// the track must never wear a tire, however long it sits there.
+export function wearPerDist(dist, track) {
   const beyond = dist - track.halfW;
   if (beyond <= 0) return 0;
-  if (beyond <= KERB_W) return CAR.wearKerbRate;
-  return CAR.wearGrassRate;
+  if (beyond <= KERB_W) return CAR.wearKerbPerDist;
+  return CAR.wearGrassPerDist;
 }
 
 // input: { throttle: 0..1, brake: 0..1, steer: -1..1 (negative = left) }
@@ -96,6 +102,11 @@ export function stepCar(car, input, dt, track, gear = null, tireWear = false) {
   const off = car.dist > track.halfW;
   const vmax = off ? Math.min(CAR.offSpeed, localMax) : localMax;
   let v = car.v;
+  // Distance actually covered this step (see the wear line at the end) is measured from here to wherever
+  // the car ends up, after steering/speed AND the barrier clamp below — not from v*dt — so a parked car
+  // (v === 0) always measures exactly 0, whatever dt is.
+  const startX = car.x;
+  const startY = car.y;
 
   // Gated on v < localMax: once at the local ceiling the throttle stops adding further speed (the engine
   // is out of room in this gear), so sustained full throttle settles right at the cap instead of creeping
@@ -175,6 +186,9 @@ export function stepCar(car, input, dt, track, gear = null, tireWear = false) {
     car.v *= Math.pow(0.02, dt);
   }
 
-  if (tireWear) car.wear = Math.min(1, (car.wear ?? 0) + wearRate(car.dist, track) * dt);
+  if (tireWear) {
+    const moved = Math.hypot(car.x - startX, car.y - startY);
+    car.wear = Math.min(1, (car.wear ?? 0) + wearPerDist(car.dist, track) * moved);
+  }
   return car;
 }

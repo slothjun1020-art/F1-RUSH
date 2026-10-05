@@ -143,6 +143,18 @@ try {
 
   check(await host.$eval('#btn-reset', (el) => el.getBoundingClientRect().width > 0), 'reset button is still usable after cycling camera modes');
 
+  // ---- the 시점 button does the exact same thing as V, as an alternative input ----
+  await host.click('#btn-cam');
+  await host.waitForFunction(() => window.__f1.race.renderer.camMode === 't');
+  check((await camMode(host)) === 't', 'the 시점 button also cycles chase -> T-cam');
+  check((await host.evaluate(() => document.activeElement?.tagName)) === 'BODY', 'the 시점 button does not keep keyboard focus either');
+  await host.keyboard.press('KeyV'); // V still works after using the button
+  await host.waitForFunction(() => window.__f1.race.renderer.camMode === 'helmet');
+  check((await camMode(host)) === 'helmet', 'V still works after the button was used (both are live at once)');
+  await host.click('#btn-cam');
+  await host.waitForFunction(() => window.__f1.race.renderer.camMode === 'chase');
+  check((await camMode(host)) === 'chase', 'cycled back to chase, button and key agree');
+
   // ---- full race, driven by the bot ----
   const resultsShown = (p) => async () => p.evaluate(() => !document.getElementById('screen-results').hidden);
   let shotMid = false;

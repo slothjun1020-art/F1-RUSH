@@ -7,7 +7,7 @@ import {
 } from '../shared/protocol.js';
 import { getTrack } from '../shared/tracks.js';
 import { createProgress, advanceProgress, gridSlot } from '../shared/race.js';
-import { CAR, wearRate } from '../shared/physics.js';
+import { CAR, wearPerDist } from '../shared/physics.js';
 import { SPEED_SCALE } from '../shared/scale.js';
 
 // Fastest a car can legitimately advance, with headroom for network jitter (follows the world scale).
@@ -140,6 +140,9 @@ export class Room {
         }
         break;
       case 'start': this.start(p); break;
+      case 'quit':
+        if (this.phase === 'racing' && p.rs && !p.rs.finished && !p.rs.dnf) this.quitRace(p);
+        break;
       case 'lobby':
         if (id === this.hostId && this.phase === 'results') {
           this.phase = 'lobby';
@@ -206,15 +209,14 @@ export class Room {
     const recv = this.now();
     const claimed = isFiniteNum(msg.ts, 1e15) ? msg.ts : recv;
     const t = Math.min(Math.max(claimed, rs.lastT), recv);
+    const prevPos = rs.pos;
     rs.pos = { x: msg.x, y: msg.y, a: msg.a, v: msg.v };
     if (t <= startAt) return; // no progress before the lights go out
 
     const dt = Math.max(t - rs.lastT, 50) / 1000;
+    const maxAdvance = MAX_SPEED_FOR_CHECKS * dt + ADVANCE_SLACK;
     const before = rs.prog.total;
-    const { dist } = advanceProgress(track, rs.prog, msg.x, msg.y, {
-      win: 40,
-      maxAdvance: MAX_SPEED_FOR_CHECKS * dt + ADVANCE_SLACK,
-    });
+    const { dist } = advanceProgress(track, rs.prog, msg.x, msg.y, { win: 40, maxAdvance });
     if (dist > track.width * 3) {
       // Far from the circuit: undo, the report is bogus.
       rs.prog.total = before;
@@ -224,7 +226,14 @@ export class Room {
     rs.lastT = t;
 
     if (this.tireWear) {
-      rs.wear = Math.min(1, rs.wear + wearRate(dist, track) * dt);
+      // Wear is proportional to distance actually moved while in the grass/kerb zone, never to elapsed
+      // time — sitting still off-track must never wear a tire (see wearPerDist(), shared/physics.js).
+      // The move itself is capped at maxAdvance, the same "fastest a car can legitimately get here"
+      // ceiling already used against bogus progress above, so a stale report after a gap (several
+      // earlier ones rejected as "too far from the circuit" during a spin, say) can't dump an inflated
+      // distance into wear either.
+      const moved = Math.min(Math.hypot(msg.x - prevPos.x, msg.y - prevPos.y), maxAdvance);
+      rs.wear = Math.min(1, rs.wear + wearPerDist(dist, track) * moved);
       if (rs.wear >= 1) { this.dnfPlayer(p, t); return; }
     }
 
@@ -273,18 +282,39 @@ export class Room {
     this.broadcast({
       t: 'fin', id: p.id, place: rs.place, time: Math.round(rs.finishTime), laps: rs.lapTimes.map(Math.round),
     });
+    this.broadcastRoom();
     this.checkRaceEnd();
   }
 
-  // Tire wear reached 100% (tireWear room setting only — see onState). The player stays connected and in
-  // this.players (unlike leaving), so they keep seeing the race — just unable to drive any further, and
-  // free to spectate another car — while everyone else is told why they dropped out.
-  dnfPlayer(p, t) {
+  // A driver drops out mid-race — either tire wear hit 100% (reason 'wear', see onState) or they clicked
+  // the HUD's "나가기" button on purpose (reason 'left', see quitRace() below). Either way the player
+  // stays connected and in this.players (unlike actually leaving the room), so they keep seeing the race
+  // — just unable to drive any further, and free to spectate another car — while everyone else is told
+  // why they dropped out.
+  dnfPlayer(p, t, reason = 'wear', hostChanged = false) {
     const rs = p.rs;
     rs.dnf = true;
     rs.dnfTime = t - this.race.startAt;
-    this.broadcast({ t: 'dnf', id: p.id, nick: p.nick, reason: 'wear' });
+    // Dropping out doesn't erase the laps already banked before it: any lap this driver validly
+    // completed this race is still a real result and belongs on the track's leaderboard, same as a
+    // finisher's best lap (see finishPlayer() below).
+    if (rs.bestLapInRace) {
+      this.ghosts.maybeUpdate(this.trackId, { nick: p.nick, time: rs.bestLapInRace.time, path: rs.bestLapInRace.path });
+    }
+    this.broadcast({ t: 'dnf', id: p.id, nick: p.nick, reason, hostId: this.hostId, hostChanged });
+    this.broadcastRoom();
     this.checkRaceEnd();
+  }
+
+  // "나가기" during a race: unlike removePlayer() (the lobby's "방 나가기", a real departure), this driver
+  // keeps their seat in the room and lands back in its lobby view while everyone else keeps racing. If
+  // they were the host, hand that off right away — they won't be the one looking at the results screen
+  // once the race ends, so whoever is needs the authority to send everyone back to the lobby (see the
+  // lobby's own "모두 로비로 돌려보내기" escape hatch in public/main.js for the case where nobody can).
+  quitRace(p) {
+    const hostChanged = this.hostId === p.id && this.players.size > 1;
+    if (hostChanged) this.hostId = [...this.players.keys()].find((id) => id !== p.id);
+    this.dnfPlayer(p, this.now(), 'left', hostChanged);
   }
 
   checkRaceEnd() {
@@ -313,6 +343,11 @@ export class Room {
         a: Math.round(p.rs.pos.a * 100) / 100,
         v: Math.round(p.rs.pos.v),
         tot: Math.round(p.rs.prog.total),
+        // The owning client reconciles its own locally-predicted gauge against this authoritative value
+        // (see public/game.js's handleSnap) — the two use the same wearPerDist() formula and should
+        // rarely disagree by much, but this is what actually decides the DNF above, so it must be what
+        // the gauge ends up showing, not a separately-drifting local guess.
+        ...(this.tireWear ? { wear: Math.round(p.rs.wear * 1000) / 1000 } : null),
       })),
     });
   }
@@ -346,6 +381,10 @@ export class Room {
     });
     rows.forEach((r, i) => { r.place = i + 1; delete r.total; });
     this.broadcast({ t: 'results', rows, laps: this.laps });
+    // A driver who quit mid-race (quitRace()) is sitting in this room's lobby view already, not looking
+    // at the results screen — this is the only way their room state (and the lobby's "모두 로비로
+    // 돌려보내기" hint/button for a quitting host) learns the race actually ended.
+    this.broadcastRoom();
   }
 
   // ---- output -----------------------------------------------------------

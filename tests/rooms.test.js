@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Room } from '../server/rooms.js';
 import { getTrack } from '../shared/tracks.js';
-import { createCar, stepCar } from '../shared/physics.js';
+import { createCar, stepCar, CAR } from '../shared/physics.js';
 import { pointAt, KERB_W } from '../shared/track-geom.js';
 import { botInput } from '../shared/bot.js';
 
@@ -306,6 +306,91 @@ test('the leaver disappears from position snapshots', () => {
   assert.deepEqual(guest.last('snap').cars.map((c) => c.id), [guest.id]);
 });
 
+// ---- quitting mid-race (나가기: DNF, but stays in the room) ------------------------------------
+
+test('quitting mid-race: the quitter is DNF but stays a room member; the others race on', () => {
+  const { clock, room, players: [host, guest] } = startRace(2);
+  const driveHost = makeDriver(room, clock, host, 1);
+  const driveGuest = makeDriver(room, clock, guest, 1);
+  for (let i = 0; i < 20 * 8; i++) { clock.t += 50; driveHost(); driveGuest(); room.tick(); }
+
+  room.handle(guest.id, { t: 'quit' });
+  assert.equal(room.phase, 'racing', 'the host keeps racing');
+  assert.ok(room.players.has(guest.id), 'the quitter is still in the room, unlike removePlayer()');
+  assert.equal(room.players.get(guest.id).rs.dnf, true);
+  assert.equal(room.hostId, host.id, 'host did not change: the quitter was not the host');
+
+  const dnfMsg = host.last('dnf');
+  assert.deepEqual([dnfMsg.id, dnfMsg.nick, dnfMsg.reason, dnfMsg.hostChanged], [guest.id, 'Guest', 'left', false]);
+  assert.ok(host.last('room').players.some((p) => p.id === guest.id), "room broadcasts still list the quitter — they're a normal member");
+
+  runUntil(room, clock, [driveHost], () => room.phase === 'results');
+  const { rows } = host.last('results');
+  const guestRow = rows.find((r) => r.nick === 'Guest');
+  assert.equal(guestRow.dnf, true);
+  assert.equal(guestRow.left, undefined, 'not a room-leaver (no "(나감)" treatment), just DNF');
+});
+
+test('quitting mid-race as the host hands the host role to another player immediately', () => {
+  const { clock, room, players: [host, guest] } = startRace(2);
+  const driveHost = makeDriver(room, clock, host, 1);
+  const driveGuest = makeDriver(room, clock, guest, 1);
+  for (let i = 0; i < 20 * 8; i++) { clock.t += 50; driveHost(); driveGuest(); room.tick(); }
+
+  room.handle(host.id, { t: 'quit' });
+  assert.equal(room.hostId, guest.id, 'the host role moves to the remaining player right away');
+  const dnfMsg = guest.last('dnf');
+  assert.deepEqual([dnfMsg.hostChanged, dnfMsg.hostId], [true, guest.id]);
+  assert.equal(room.phase, 'racing', 'the new host keeps racing');
+
+  runUntil(room, clock, [driveGuest], () => room.phase === 'results');
+  assert.equal(room.phase, 'results');
+  room.handle(guest.id, { t: 'lobby' }); // only the (new) host can do this
+  assert.equal(room.phase, 'lobby');
+});
+
+test('quitting solo: no one else to hand the host role to, so the race simply ends', () => {
+  const { clock, room, players: [host] } = startRace(1);
+  clock.t += 2000;
+  room.handle(host.id, { t: 'quit' });
+  assert.equal(room.hostId, host.id, 'still the only player, still host');
+  assert.equal(room.players.get(host.id).rs.dnf, true);
+  assert.equal(room.phase, 'results', 'the only driver dropping out ends the race');
+
+  room.handle(host.id, { t: 'lobby' }); // the (still) host can send themselves back to the lobby
+  assert.equal(room.phase, 'lobby');
+});
+
+test('quit is a no-op before the race starts, and a second time once already DNF', () => {
+  const { room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'quit' }); // no race yet
+  assert.equal(room.phase, 'lobby');
+
+  const { room: room2, players: [host] } = startRace(1);
+  room2.handle(host.id, { t: 'quit' });
+  assert.equal(room2.phase, 'results');
+  const dnfCountBefore = host.inbox.filter((m) => m.t === 'dnf').length;
+  room2.handle(host.id, { t: 'quit' }); // already dnf: a no-op, not a second dnf broadcast
+  assert.equal(host.inbox.filter((m) => m.t === 'dnf').length, dnfCountBefore);
+});
+
+test('a lap banked before quitting still counts for the track leaderboard', () => {
+  const { clock, room, join, ghosts } = soloSetup(2);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const drive = makeDriver(room, clock, a, 1);
+  runUntil(room, clock, [drive], () => room.players.get(a.id).rs.lapsDone >= 1, 20 * 300);
+  assert.ok(room.players.get(a.id).rs.bestLapInRace, 'a lap was banked before quitting');
+
+  room.handle(a.id, { t: 'quit' });
+  assert.equal(room.players.get(a.id).rs.dnf, true);
+  assert.equal(room.phase, 'results', 'quitting solo ends the race');
+  const record = ghosts.get('redbullring');
+  assert.equal(record?.nick, 'Solo', 'the lap completed before quitting still made the leaderboard');
+});
+
 test('teleporting around the track does not skip laps', () => {
   const { clock, room, join } = setup(1);
   const a = join('Cheat');
@@ -525,12 +610,53 @@ test('finishing a race and returning to the lobby reflects the newly set record'
 // ---- tire wear ------------------------------------------------------------------------------
 
 // Parks a car just off the start line, offset laterally from the centerline by `offset` (world units),
-// and reports that single stationary position. `offset` past track.halfW is the kerb/grass; see physics.js.
+// and reports that single stationary (v: 0) position. `offset` past track.halfW is the kerb/grass; see
+// physics.js. Used for the off/on toggle checks and the "standing still never wears" test below — wear
+// is purely a function of distance moved (see wearPerDist()), so a single parked report, or many of
+// them at the same spot, must never add any.
 function reportParked(room, clock, p, track, offset) {
   const a = track.angs[0];
   const x = track.xs[0] - Math.sin(a) * offset;
   const y = track.ys[0] + Math.cos(a) * offset;
   room.handle(p.id, { t: 's', x, y, a, v: 0, ts: clock.t });
+}
+
+// Drives a car in a straight line from the start line, offset laterally by `offset` (world units; past
+// track.halfW is the kerb/grass — see physics.js), covering `totalDistance` world units split into
+// normal-cadence reports. Because the path is exactly straight, the Euclidean distance between
+// consecutive reports always sums to exactly `totalDistance`, however finely or coarsely it's chopped up
+// (see the `stepMs` option) — which is exactly the property "wear tracks real distance moved, not report
+// cadence" needs to test precisely.
+// Drives at a constant offset from the (curving) centerline — using pointAt() at each step, not a
+// straight line from the grid heading, so it tracks the real track and never drifts out of the intended
+// kerb/grass band over a long distance. `startDistance` lets a later call pick up where an earlier one
+// on the same car left off, so two calls in a row cover totalDistance1 + totalDistance2 of real arc
+// length rather than overlapping/jumping back to the start line. Returns the ending arc length, to pass
+// as the next call's startDistance. (The Euclidean distance onState() actually sees between reports is
+// the straight chord between two curved-track points, very slightly short of the nominal step on a
+// corner — hence the tolerance on exact-proportionality assertions, rather than a few-ULP comparison.)
+function reportAt(room, clock, p, track, offset, s, v, stepMs) {
+  const base = pointAt(track, s);
+  const x = base.x - Math.sin(base.a) * offset;
+  const y = base.y + Math.cos(base.a) * offset;
+  clock.t += stepMs;
+  room.handle(p.id, { t: 's', x, y, a: base.a, v, ts: clock.t });
+}
+
+function driveThroughZone(room, clock, p, track, offset, totalDistance, { speed = 200, stepMs = 50, startDistance = 0 } = {}) {
+  const stepDist = speed * (stepMs / 1000);
+  const steps = Math.max(1, Math.round(totalDistance / stepDist));
+  // Settle at the starting position first — this absorbs whatever the car's *previous* reported position
+  // happened to be (the grid slot, on a car's very first report; exactly here already, a no-op, on a
+  // later call continuing via startDistance) as its own, separate move, so it never gets folded into the
+  // measured steps below and inflates the distance this call is supposed to cover.
+  reportAt(room, clock, p, track, offset, startDistance, 0, stepMs);
+  let s = startDistance;
+  for (let i = 0; i < steps; i++) {
+    s += stepDist;
+    reportAt(room, clock, p, track, offset, s, speed, stepMs);
+  }
+  return s;
 }
 
 test('tire wear is off by default; turning it on resets ready like collisions/gear mode', () => {
@@ -567,7 +693,7 @@ test('tire wear off: sitting in the grass never accumulates wear or causes a DNF
   assert.equal(room.players.get(a.id).rs.dnf, false);
 });
 
-test('tire wear on: sitting in the grass accumulates wear and DNFs at 100%', () => {
+test('tire wear on: moving through the grass accumulates wear and DNFs at exactly 100%, not before', () => {
   const { clock, room, join } = setup(1);
   const a = join('Solo');
   room.handle(a.id, { t: 'tirewear', on: true });
@@ -575,17 +701,38 @@ test('tire wear on: sitting in the grass accumulates wear and DNFs at 100%', () 
   room.handle(a.id, { t: 'start' });
   const track = getTrack('redbullring');
   const off = track.halfW + 200;
+  // A long straight on this track (see shared/tracks.js's redbullring) starting here: angs[] is exactly
+  // constant from s=576 to past s=3000, so a car driven along it at a constant lateral offset covers
+  // *exactly* the nominal distance between reports, with no curvature-driven over/undershoot to account
+  // for — this test can check exact wear percentages instead of just "roughly".
+  const straightStart = 576;
+  const savedRate = CAR.wearGrassPerDist;
+  CAR.wearGrassPerDist = 1 / 1000; // 100% at exactly 1000 units — just for this test, to fit on the straight
+  try {
+    clock.t = room.race.startAt;
+    // Settle onto the straight first: the jump from the grid slot to here is real distance too (capped
+    // at the same anti-cheat ceiling as advanceProgress's own maxAdvance — see onState()), and it must
+    // not count against the 1000 units this test measures from here.
+    reportAt(room, clock, a, track, off, straightStart, 0, 50);
+    room.players.get(a.id).rs.wear = 0;
+    let moved = driveThroughZone(room, clock, a, track, off, 200, { startDistance: straightStart }); // 20%: not enough yet
+    let rs = room.players.get(a.id).rs;
+    assert.ok(Math.abs(rs.wear - 0.2) < 1e-3, `wear after 20% of the distance: ${rs.wear}`);
+    assert.equal(rs.dnf, false);
 
-  clock.t = room.race.startAt + 10000; // 10s of grass: not enough yet
-  reportParked(room, clock, a, track, off);
-  const rs = room.players.get(a.id).rs;
-  assert.ok(rs.wear > 0 && rs.wear < 1, `wear after 10s: ${rs.wear}`);
-  assert.equal(rs.dnf, false);
+    // Right up to the edge — 99% — must still not DNF.
+    moved = driveThroughZone(room, clock, a, track, off, 790, { startDistance: moved });
+    rs = room.players.get(a.id).rs;
+    assert.ok(Math.abs(rs.wear - 0.99) < 1e-3, `wear at 99%: ${rs.wear}`);
+    assert.equal(rs.dnf, false, '99% wear must not DNF — only exactly 100% does');
 
-  clock.t = room.race.startAt + 30000; // 30s total: comfortably past 100%
-  reportParked(room, clock, a, track, off);
-  assert.equal(room.players.get(a.id).rs.dnf, true);
-  assert.equal(room.players.get(a.id).rs.wear, 1);
+    // The last bit crosses the line for real.
+    driveThroughZone(room, clock, a, track, off, 50, { startDistance: moved });
+    assert.equal(room.players.get(a.id).rs.wear, 1);
+    assert.equal(room.players.get(a.id).rs.dnf, true);
+  } finally {
+    CAR.wearGrassPerDist = savedRate;
+  }
 });
 
 test('a wear DNF broadcasts a dnf message and ends a solo race, with the row marked DNF in the results', () => {
@@ -595,8 +742,8 @@ test('a wear DNF broadcasts a dnf message and ends a solo race, with the row mar
   room.handle(a.id, { t: 'track', id: 'redbullring' });
   room.handle(a.id, { t: 'start' });
   const track = getTrack('redbullring');
-  clock.t = room.race.startAt + 30000;
-  reportParked(room, clock, a, track, track.halfW + 200);
+  clock.t = room.race.startAt;
+  driveThroughZone(room, clock, a, track, track.halfW + 200, 2 / CAR.wearGrassPerDist);
 
   const dnfMsg = a.last('dnf');
   assert.ok(dnfMsg);
@@ -618,8 +765,8 @@ test("one player's wear DNF does not end the race while another is still going",
   room.handle(b.id, { t: 'ready', ready: true });
   room.handle(a.id, { t: 'start' });
   const track = getTrack('redbullring');
-  clock.t = room.race.startAt + 30000;
-  reportParked(room, clock, a, track, track.halfW + 200);
+  clock.t = room.race.startAt;
+  driveThroughZone(room, clock, a, track, track.halfW + 200, 2 / CAR.wearGrassPerDist);
 
   assert.equal(room.players.get(a.id).rs.dnf, true);
   assert.equal(room.phase, 'racing', 'the other player is still racing');
@@ -643,8 +790,8 @@ test('kerb wear accumulates slower than grass wear over the same time', () => {
   room.handle(a.id, { t: 'track', id: 'redbullring' });
   room.handle(a.id, { t: 'start' });
   const track = getTrack('redbullring');
-  clock.t = room.race.startAt + 5000;
-  reportParked(room, clock, a, track, track.halfW + KERB_W / 2);
+  clock.t = room.race.startAt;
+  driveThroughZone(room, clock, a, track, track.halfW + KERB_W / 2, 1000);
   const kerbWear = room.players.get(a.id).rs.wear;
   assert.ok(kerbWear > 0 && kerbWear < 1);
 
@@ -653,11 +800,107 @@ test('kerb wear accumulates slower than grass wear over the same time', () => {
   second.room.handle(c.id, { t: 'tirewear', on: true });
   second.room.handle(c.id, { t: 'track', id: 'redbullring' });
   second.room.handle(c.id, { t: 'start' });
-  second.clock.t = second.room.race.startAt + 5000;
-  reportParked(second.room, second.clock, c, track, track.halfW + KERB_W + 50);
+  second.clock.t = second.room.race.startAt;
+  driveThroughZone(second.room, second.clock, c, track, track.halfW + KERB_W + 50, 1000);
   const grassWear = second.room.players.get(c.id).rs.wear;
 
   assert.ok(grassWear > kerbWear, `grass ${grassWear} should wear faster than kerb ${kerbWear}`);
+});
+
+test('tire wear on: staying on the asphalt (never touching grass/kerb) never accumulates wear', () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt;
+  driveThroughZone(room, clock, a, track, 0, 5000); // dead center, well inside the asphalt
+  assert.equal(room.players.get(a.id).rs.wear, 0, 'never touching grass/kerb must never add wear');
+  assert.equal(room.players.get(a.id).rs.dnf, false);
+});
+
+test('tire wear on: standing still (v=0) in the grass never accumulates wear, no matter how long', () => {
+  const { clock, room, join } = setup(1);
+  const a = join('Solo');
+  room.handle(a.id, { t: 'tirewear', on: true });
+  room.handle(a.id, { t: 'track', id: 'redbullring' });
+  room.handle(a.id, { t: 'start' });
+  const track = getTrack('redbullring');
+  clock.t = room.race.startAt;
+  // The very first report after the grid still moves (from the grid slot to this parked spot), so settle
+  // into position once before measuring — it's staying there afterwards that must add nothing.
+  clock.t += 50;
+  reportParked(room, clock, a, track, track.halfW + 200);
+  const settledWear = room.players.get(a.id).rs.wear;
+  for (let i = 0; i < 200; i++) { // 10s of repeated reports at the exact same spot in the grass
+    clock.t += 50;
+    reportParked(room, clock, a, track, track.halfW + 200);
+  }
+  assert.equal(room.players.get(a.id).rs.wear, settledWear, 'no movement means no wear — it tracks distance, not time');
+  assert.equal(room.players.get(a.id).rs.dnf, false);
+});
+
+test('tire wear accumulates in exact proportion to distance moved through the grass, regardless of report cadence', () => {
+  const track = getTrack('redbullring');
+  const grassOffset = track.halfW + 200;
+  // A long, exactly straight stretch (see the "exactly 100%" test above) — keeps the car at a truly
+  // constant distance from the centerline for the whole run, so the distance onState() measures between
+  // reports matches the nominal step exactly, whatever that step size is.
+  const straightStart = 576;
+
+  // Scenario A: 1000 world units of grass, reported every 50ms (the normal cadence).
+  const a = setup(1);
+  const pa = a.join('Solo');
+  a.room.handle(pa.id, { t: 'tirewear', on: true });
+  a.room.handle(pa.id, { t: 'track', id: 'redbullring' });
+  a.room.handle(pa.id, { t: 'start' });
+  a.clock.t = a.room.race.startAt;
+  // Settle onto the straight first — the jump from the grid slot is real distance too, and must not
+  // count against the 1000 units this test measures from here (see the "exactly 100%" test above).
+  reportAt(a.room, a.clock, pa, track, grassOffset, straightStart, 0, 50);
+  a.room.players.get(pa.id).rs.wear = 0;
+  let movedA = driveThroughZone(a.room, a.clock, pa, track, grassOffset, 1000, { stepMs: 50, startDistance: straightStart });
+  const wearA = a.room.players.get(pa.id).rs.wear;
+
+  // Scenario B: the exact same 1000 units of straight-line distance, but chopped into far coarser,
+  // 250ms reports instead. Wear must land on the exact same value either way: it is a function of
+  // distance actually covered, not of how often the position happens to be reported (the bug this
+  // guards against: a sudden jump whose size depended on report gaps, not on distance actually
+  // travelled).
+  const b = setup(1);
+  const pb = b.join('Solo');
+  b.room.handle(pb.id, { t: 'tirewear', on: true });
+  b.room.handle(pb.id, { t: 'track', id: 'redbullring' });
+  b.room.handle(pb.id, { t: 'start' });
+  b.clock.t = b.room.race.startAt;
+  reportAt(b.room, b.clock, pb, track, grassOffset, straightStart, 0, 50);
+  b.room.players.get(pb.id).rs.wear = 0;
+  driveThroughZone(b.room, b.clock, pb, track, grassOffset, 1000, { stepMs: 250, startDistance: straightStart });
+  const wearB = b.room.players.get(pb.id).rs.wear;
+
+  const expected = CAR.wearGrassPerDist * 1000;
+  assert.ok(Math.abs(wearA - expected) < 1e-3, `50ms cadence: wear ${wearA} should equal ${expected}`);
+  assert.ok(Math.abs(wearB - expected) < 1e-3, `250ms cadence: wear ${wearB} should equal ${expected}`);
+  assert.ok(Math.abs(wearA - wearB) < 1e-3, `wear must match exactly regardless of report cadence (${wearA} vs ${wearB})`);
+
+  // Standing still afterwards, at wherever driveThroughZone left the car (not back at the start line —
+  // reportParked() always reports position 0, which would itself register as a 1000-unit "move" back),
+  // must not add any more wear.
+  const base = pointAt(track, movedA);
+  const parkX = base.x - Math.sin(base.a) * grassOffset;
+  const parkY = base.y + Math.cos(base.a) * grassOffset;
+  for (let i = 0; i < 100; i++) {
+    a.clock.t += 50;
+    a.room.handle(pa.id, { t: 's', x: parkX, y: parkY, a: base.a, v: 0, ts: a.clock.t });
+  }
+  assert.equal(a.room.players.get(pa.id).rs.wear, wearA, 'parking in the grass afterwards adds nothing');
+
+  // Covering another 1000 units, continuing from there, doubles the wear (linear in distance, not a
+  // one-shot jump).
+  movedA = driveThroughZone(a.room, a.clock, pa, track, grassOffset, 1000, { stepMs: 50, startDistance: movedA });
+  const wearDouble = a.room.players.get(pa.id).rs.wear;
+  assert.ok(Math.abs(wearDouble - wearA * 2) < 1e-3, `2000 units of grass (${wearDouble}) should be exactly 2x 1000 (${wearA})`);
 });
 
 test("once DNF'd, further state reports from that player are ignored", () => {
@@ -667,8 +910,8 @@ test("once DNF'd, further state reports from that player are ignored", () => {
   room.handle(a.id, { t: 'track', id: 'redbullring' });
   room.handle(a.id, { t: 'start' });
   const track = getTrack('redbullring');
-  clock.t = room.race.startAt + 30000;
-  reportParked(room, clock, a, track, track.halfW + 200);
+  clock.t = room.race.startAt;
+  driveThroughZone(room, clock, a, track, track.halfW + 200, 2 / CAR.wearGrassPerDist);
   assert.equal(room.players.get(a.id).rs.dnf, true);
   const totalAfterDnf = room.players.get(a.id).rs.prog.total;
 

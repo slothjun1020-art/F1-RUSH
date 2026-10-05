@@ -139,7 +139,13 @@ export class RaceView {
     // interpolation delay needs to track (see public/interp.js).
     recordArrival(this.jitter, performance.now());
     for (const c of msg.cars) {
-      if (c.id === this.meId) continue;
+      if (c.id === this.meId) {
+        // Position/speed stay locally predicted (see update()) for responsiveness, but wear is what the
+        // server actually bases the DNF decision on — resync the HUD gauge to it so it can never show a
+        // lower number than what just DNF'd the player (see server/rooms.js's tick()/onState()).
+        if (c.wear != null) this.car.wear = c.wear;
+        continue;
+      }
       let r = this.remotes.get(c.id);
       if (!r) { r = { buf: [], tot: 0, smoother: null }; this.remotes.set(c.id, r); }
       r.buf.push({ st: msg.st, x: c.x, y: c.y, a: c.a, v: c.v });
@@ -164,13 +170,22 @@ export class RaceView {
     }
   }
 
-  // Tire wear hit 100% for someone (server/rooms.js's dnfPlayer — always carries reason: 'wear' for now).
-  // Unlike handleLeft, this player stays in this.players and keeps rendering (frozen where they wore out)
-  // — they just stop driving, and if it's the local player, can spectate anyone else from the leaderboard.
+  // Someone dropped out mid-race — tire wear hit 100% (reason 'wear') or they clicked "나가기" on purpose
+  // (reason 'left'; see server/rooms.js's dnfPlayer()/quitRace()). Unlike handleLeft, this player stays in
+  // this.players and keeps rendering (frozen where they dropped out) — they just stop driving, and if it's
+  // the local player, can spectate anyone else from the leaderboard. The full message (not just the nick)
+  // goes to onDnf so the caller can also report a host handoff (quitting hosts hand it off immediately).
   handleDnf(msg) {
     this.dnfIds.add(msg.id);
-    if (msg.id === this.meId) this.dnf = true;
-    this.onDnf?.(msg.nick);
+    if (msg.id === this.meId) {
+      this.dnf = true;
+      // Only reason 'wear' ever implies the gauge reached 100% — a 'left' DNF (quitRace()) can land here
+      // at any wear level, including 0. Forcing it to 1 only for 'wear' means the gauge can never show
+      // less than 100% at the moment it DNFs the player, even a tick before the next snap (see
+      // handleSnap) would have caught it up anyway.
+      if (msg.reason === 'wear') this.car.wear = 1;
+    }
+    this.onDnf?.(msg);
   }
 
   // Called by the HUD leaderboard click handler (drawHud) once DNF'd. Spectating yourself or an unknown

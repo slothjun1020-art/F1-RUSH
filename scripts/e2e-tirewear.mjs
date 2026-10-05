@@ -4,9 +4,11 @@
 //
 // The test server runs in this same Node process (like every other e2e script here), so
 // shared/physics.js's CAR object is the exact instance server/rooms.js's wear math reads from — bumping
-// CAR.wearGrassRate up for this run makes the whole DNF flow testable in a couple of seconds instead of
-// the real ~25s the default rate implies. The same bump is applied separately in the browser (its own,
-// unrelated copy of the module) so the HUD gauge climbs just as fast for the person actually "driving".
+// CAR.wearGrassPerDist up for this run makes the whole DNF flow testable over a short, drivable distance
+// instead of the real ~5500 world units the default rate implies. The same bump is applied separately in
+// the browser (its own, unrelated copy of the module) so the HUD gauge climbs just as fast for the person
+// actually "driving". Wear is proportional to distance moved, not time (see wearPerDist(),
+// shared/physics.js) — so the car is driven forward through the grass, not just parked there.
 // Usage: node scripts/e2e-tirewear.mjs   (needs Google Chrome; set CHROME_PATH if it lives elsewhere)
 
 import { CAR } from '../shared/physics.js';
@@ -15,7 +17,7 @@ import {
   launchBrowser, drive, sleep, fakeGhostsStore,
 } from './browser-helpers.mjs';
 
-CAR.wearGrassRate = 1; // 100% wear in ~1s of continuous grass contact, just for this test run
+CAR.wearGrassPerDist = 1 / 400; // 100% wear in 400 world units of continuous grass, just for this test run
 
 const game = await createGameServer({ laps: 1, ghosts: fakeGhostsStore() });
 await new Promise((r) => game.server.listen(0, '127.0.0.1', r));
@@ -71,27 +73,33 @@ try {
 
   await host.waitForFunction(() => document.getElementById('hud-center').textContent === 'GO!', { timeout: 15000 });
 
-  // ---- park the host's car in the grass and bump the browser's own copy of the wear rate too ----
+  // ---- place the host's car in the grass, on a long straight, and bump the browser's own copy of the
+  //      wear rate too — then actually drive it forward (wear is proportional to distance moved, never
+  //      to time stopped; see wearPerDist(), shared/physics.js) ----
   await host.evaluate(async () => {
-    const { KERB_W } = await import('/shared/track-geom.js');
+    const { pointAt } = await import('/shared/track-geom.js');
     const { CAR: carConst } = await import('/shared/physics.js');
-    carConst.wearGrassRate = 1;
+    carConst.wearGrassPerDist = 1 / 400;
     const { car, track } = window.__f1.race;
-    const a = track.angs[car.seg];
-    const off = track.halfW + KERB_W + 50;
-    car.x = track.xs[car.seg] - Math.sin(a) * off;
-    car.y = track.ys[car.seg] + Math.cos(a) * off;
+    const base = pointAt(track, 700); // a long straight on redbullring — see shared/tracks.js
+    const off = track.halfW + 50; // well into the grass band
+    car.x = base.x - Math.sin(base.a) * off;
+    car.y = base.y + Math.cos(base.a) * off;
+    car.a = base.a;
     car.v = 0;
+    car.seg = Math.floor(700 / track.spacing) % track.n;
   });
+  await host.keyboard.down('ArrowUp'); // drive forward through the grass from here
 
   await host.waitForFunction(() => {
     const pct = document.getElementById('tire-pct').textContent;
     return pct !== '0%';
   }, { timeout: 5000 });
-  check(true, 'the gauge percentage climbs once parked in the grass');
+  check(true, 'the gauge percentage climbs while driving through the grass');
 
   // ---- wait for the server to call the DNF (authoritative — see server/rooms.js's onState) ----
   await host.waitForFunction(() => document.getElementById('hud-center').textContent.includes('탈락'), { timeout: 20000 });
+  await host.keyboard.up('ArrowUp');
   check(true, "the DNF'd player's own screen explains why and how to spectate");
   check(await host.$eval('#hud-board', (el) => el.classList.contains('spectate-mode')), 'the leaderboard becomes clickable');
 
