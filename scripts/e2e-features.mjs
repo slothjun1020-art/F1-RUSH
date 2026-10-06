@@ -1,8 +1,10 @@
 // End-to-end check of the four new features in real (headless) Chrome:
-// lobby toggles for collisions/gear mode (host-only, visible to everyone), the gear-mode controls
-// dialog (shown at race start, including to a player who joins the room later), free shifting with the
-// gear HUD's informational-only "too fast" / "too slow" cues and live engine braking, and cars pushing
-// each other apart when collisions are on. Runs at the lowest 3D quality for speed (?q=3).
+// lobby toggles for collisions/gear mode (host-only, visible to everyone), the gear-mode controls dialog
+// (shown the instant gear mode is turned on in the lobby, including to a player who joins later — never
+// again at race start), semi-automatic shifting (Shift always upshifts; braking under the current gear's
+// band downshifts automatically, never manually) with the gear HUD's informational-only "too fast" /
+// "too slow" cues and live engine braking, and cars pushing each other apart when collisions are on.
+// Runs at the lowest 3D quality for speed (?q=3).
 // Usage: node scripts/e2e-features.mjs   (needs Google Chrome; set CHROME_PATH if it lives elsewhere)
 
 import { createGameServer } from '../server/index.js';
@@ -51,14 +53,25 @@ try {
   check(!(await host.$eval('#btn-gearmode', (el) => el.classList.contains('on'))), 'gear mode starts off');
   check(await guest.$eval('#btn-collisions', (el) => el.disabled), 'a guest cannot toggle collisions');
   check(await guest.$eval('#btn-gearmode', (el) => el.disabled), 'a guest cannot toggle gear mode');
+  check(!(await visible(host, '#gear-info')), 'no gear-mode dialog before it is turned on');
 
   await host.click('#btn-collisions');
   await guest.waitForFunction(() => document.getElementById('btn-collisions').classList.contains('on'));
   check((await text(guest, '#btn-collisions .t-state')) === '켜짐', 'the guest sees collisions turn on');
 
+  // ---- turning gear mode on in the lobby shows the controls dialog immediately, to everyone there ----
   await host.click('#btn-gearmode');
   await guest.waitForFunction(() => document.getElementById('btn-gearmode').classList.contains('on'));
   check((await text(guest, '#btn-gearmode .t-state')) === '켜짐', 'the guest sees gear mode turn on');
+  await Promise.all([host, guest].map((p) => p.waitForFunction(() => !document.getElementById('gear-info').hidden)));
+  check(true, 'turning gear mode on shows everyone in the lobby the controls dialog right away');
+  const dialogText = await text(host, '#gear-info');
+  check(dialogText.includes('Shift') && dialogText.includes('브레이크'), `the dialog is just the controls, briefly (got: ${dialogText})`);
+  check((await host.evaluate(() => document.activeElement?.id)) === 'gear-info-ok', 'focus starts on the OK button');
+  await host.keyboard.press('Escape');
+  check(await visible(host, '#gear-info') === false, 'Esc closes the dialog');
+  await guest.click('#gear-info-ok');
+  check(await visible(guest, '#gear-info') === false, 'the OK button closes the dialog too');
 
   // ---- a third player joins the lobby *after* gear mode was already turned on ----
   const third = await newPlayer('third');
@@ -67,48 +80,54 @@ try {
   await third.click('#btn-join');
   await lobbyPlayers(host, 3);
   check(await third.$eval('#btn-gearmode', (el) => el.classList.contains('on')), 'the late joiner sees gear mode already on in the lobby');
+  await third.waitForFunction(() => !document.getElementById('gear-info').hidden);
+  check(true, 'and gets the controls dialog immediately too, without waiting for a race to start');
+  await third.click('#gear-info-ok');
 
-  // ---- race 1: everyone (including the late joiner) sees the gear-mode dialog on their first race ----
+  // ---- the dialog never reappears once a race actually starts ----
   await guest.click('#btn-ready');
   await third.click('#btn-ready');
   await host.waitForFunction(() => !document.getElementById('btn-start').disabled);
   await host.click('#btn-start');
   await Promise.all([host, guest, third].map((p) => p.waitForFunction(() => !document.getElementById('hud').hidden)));
+  await sleep(300);
+  check(await host.$eval('#gear-info', (el) => el.hidden), 'the gear-mode dialog does not pop up again at race start');
 
-  // ---- gear-mode controls dialog: shown to everyone, blocks driving keys, closes via OK or Esc ----
-  await Promise.all([host, guest, third].map((p) => p.waitForFunction(() => !document.getElementById('gear-info').hidden)));
-  check(true, 'the player who joined later also gets the gear-mode dialog, on their first race');
-  await third.click('#gear-info-ok');
-  check((await text(host, '#gear-info')).includes('3') && (await text(host, '#gear-info')).includes('4'), 'the dialog explains the 3/4 keys');
-  check((await host.evaluate(() => document.activeElement?.id)) === 'gear-info-ok', 'focus starts on the OK button');
-  await host.keyboard.down('ArrowUp');
-  await sleep(120);
-  await host.keyboard.up('ArrowUp');
-  const whileOpen = await raceState(host);
-  check(whileOpen.v === 0, 'driving keys are ignored while the dialog is open');
-  await host.keyboard.press('Escape');
-  check(await visible(host, '#gear-info') === false, 'Esc closes the dialog');
-  await guest.click('#gear-info-ok');
-  check(await visible(guest, '#gear-info') === false, 'the OK button closes the dialog too');
-
-  // Wait for the lights to actually go out: the physics/collision loop only runs once the race has
-  // started, and the countdown dialog above may still have been up when it began.
+  // Wait for the lights to actually go out: the physics/collision loop only runs once the race has started.
   await host.waitForFunction(() => document.getElementById('hud-center').textContent === 'GO!', { timeout: 15000 });
 
   check(await visible(host, '#hud-gear'), 'the gear HUD is shown for a gear-mode race');
   check((await text(host, '#hud-gear-num')) === '1', 'starts in 1st gear');
 
-  // ---- shifting is never blocked: up, then straight down again from any speed ----
-  await host.keyboard.press('Digit4');
+  // ---- Shift upshifts, any number of times, capped at gear 8 — never blocked. Both physical keys work
+  //      identically (e.key, not e.code — see input.js) ----
+  await host.keyboard.press('ShiftLeft');
   await host.waitForFunction(() => document.getElementById('hud-gear-num').textContent === '2');
-  check(true, '4 upshifts');
+  check(true, 'left Shift upshifts');
+  await host.keyboard.press('ShiftRight');
+  await host.waitForFunction(() => document.getElementById('hud-gear-num').textContent === '3');
+  check(true, 'right Shift upshifts too');
+  await host.evaluate(() => { window.__f1.race.gear = 8; }); // already at the top gear
+  await host.waitForFunction(() => document.getElementById('hud-gear-num').textContent === '8');
+  await host.keyboard.press('ShiftRight');
+  await sleep(300);
+  check((await text(host, '#hud-gear-num')) === '8', 'Shift never goes past gear 8 (8-speed, unchanged)');
+  check((await host.evaluate(() => document.activeElement?.tagName)) === 'BODY', 'Shift does not keep keyboard focus');
 
-  await host.evaluate(() => { window.__f1.race.car.v = 250; }); // far above gear 1's 20 km/h cap
-  await host.keyboard.press('Digit3');
-  // Shifts to 1 right away — no block, no delay. Speed itself starts easing down immediately afterward
-  // (gear 1's engine braking), which is covered separately below, so this only checks the shift landed.
-  await host.waitForFunction(() => document.getElementById('hud-gear-num').textContent === '1', { timeout: 2000 });
-  check(true, 'downshifting even at high speed is immediate, no block');
+  // ---- downshifting is automatic, tied to braking — never a manual key, and never while accelerating ----
+  await host.evaluate(() => { window.__f1.race.car.v = 250; }); // gear 8, but far under even gear 2's band
+  check((await text(host, '#hud-gear-num')) === '8', 'still gear 8 — speed dropping alone changes nothing');
+  await host.keyboard.down('ArrowDown'); // brake
+  await host.waitForFunction(() => document.getElementById('hud-gear-num').textContent !== '8', { timeout: 2000 });
+  check(true, 'braking while under the current gear\'s band downshifts automatically');
+  await host.keyboard.up('ArrowDown');
+  const droppedTo = Number(await text(host, '#hud-gear-num'));
+  check(droppedTo >= 1 && droppedTo < 8, `landed on a gear matching 250 units/s (got gear ${droppedTo})`);
+
+  await host.keyboard.down('ArrowUp'); // accelerate again, no brake
+  await sleep(200);
+  await host.keyboard.up('ArrowUp');
+  check(Number(await text(host, '#hud-gear-num')) === droppedTo, 'accelerating again never climbs a gear back up on its own — that still takes Shift');
   check(await host.$('#hud-gear-warn') === null, 'the old blocked-downshift warning element is gone entirely');
 
   // ---- HUD range indicators (informational only — they never touch driving input) ----
@@ -124,6 +143,12 @@ try {
     };
   });
 
+  await host.evaluate(() => {
+    const r = window.__f1.race;
+    r.gear = 1; // back to a known state — the shifting checks above left gear/speed wherever they landed
+    r.car.v = 250;
+    window.__relocate();
+  });
   check((await raceState(host)).v > 0, 'gear 1 at 250 world units/s is already over its 20 km/h cap: the "too fast" cue should be showing');
   await host.waitForFunction(() => document.getElementById('hud-gear-num').classList.contains('shift'));
   check(true, 'too fast for the gear shows the "shift" cue (still driving freely, not blocked)');

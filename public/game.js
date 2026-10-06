@@ -7,7 +7,7 @@ import { advanceProgress, createProgress, lapsCompleted } from '/shared/race.js'
 import { locate, pointAt } from '/shared/track-geom.js';
 import { SEND_HZ } from '/shared/protocol.js';
 import { resolveCollisions } from '/shared/collision.js';
-import { readInput, consumeReset, consumeGearShift } from './input.js';
+import { readInput, consumeReset, consumeGearUp } from './input.js';
 import { drawTrackFit } from './render.js';
 import {
   createJitterTracker, recordArrival, stepJitterTracker,
@@ -224,7 +224,7 @@ export class RaceView {
     const started = sn >= this.startAt;
     const input = readInput(dt);
     const reset = consumeReset();
-    const shift = consumeGearShift();
+    const gearUp = consumeGearUp();
     let drive = { throttle: 0, brake: 0, steer: 0 };
     if (started && !this.finished && !this.dnf) {
       drive = input;
@@ -235,13 +235,19 @@ export class RaceView {
       drive = { throttle: 0, brake: car.v > 5 ? 0.35 : 0, steer: 0 };
     }
 
-    // Not gated on `started`: picking a gear during the countdown (like selecting 1st before lights out)
-    // is harmless since the car isn't moving yet, and it means a shift pressed a moment early isn't lost.
-    // Shifting itself is never refused — any gear at any speed — only the physics (stepCar's lugging and
-    // engine-braking) makes a mismatched gear cost you something.
+    // Semi-automatic: Shift is the only manual shift (always up), never refused at any speed. Downshifts
+    // are automatic and tied to braking — once speed drops under the current gear's own band (the same
+    // GEAR_SPEEDS[gear-2] boundary stepCar's lugging penalty uses), it drops a gear, cascading further
+    // down in the same frame if speed fell through more than one band at once. Letting off the brake and
+    // accelerating again never climbs back up on its own; that always takes another Shift. Not gated on
+    // `started`: picking a gear during the countdown (like selecting 1st before lights out) is harmless
+    // since the car isn't moving yet. Either way, shifting itself never costs anything by itself — only
+    // the physics (stepCar's lugging and engine-braking) makes a mismatched gear cost you something.
     if (this.gearMode && !this.finished && !this.dnf) {
-      if (shift.up && this.gear < 8) this.gear++;
-      if (shift.down && this.gear > 1) this.gear--;
+      if (gearUp && this.gear < 8) this.gear++;
+      if (drive.brake > 0) {
+        while (this.gear > 1 && car.v < GEAR_SPEEDS[this.gear - 2]) this.gear--;
+      }
     }
 
     if (started) {

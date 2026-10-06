@@ -22,6 +22,10 @@ const hud = {
   tire: { root: $('hud-tire'), icon: $('tire-icon'), pct: $('tire-pct') },
 };
 
+// index.html's #hud-help starts with this text; onGo() appends the gear line only for a gear-mode race.
+const HUD_HELP_BASE = $('hud-help').textContent;
+const HUD_HELP_GEAR = ' · Shift 기어 올리기 · 브레이크 시 자동 다운시프트';
+
 // Small corner overlay of ping and frame rate, only with ?debug=1 in the address (the separate ?debug
 // flag below, with no value required, is the older hook automated tests use to reach the live race).
 const debugHud = new URLSearchParams(location.search).get('debug') === '1';
@@ -83,9 +87,10 @@ const quality = Number(new URLSearchParams(location.search).get('q')) || 0;
 let renderer3d = null;
 let CAM_LABELS = {};
 
-// The gear-mode controls dialog. Shown once per room (not once per race), the first time this client
-// sees gearMode on — whether that's because the host just turned it on, or because it was already on
-// when this player joined or started a race.
+// The gear-mode controls dialog. Shown once per room, the moment this client sees gearMode on — whether
+// that's because the host just turned it on in the lobby, or because it was already on when this player
+// joined. Checked on every 'room' broadcast (see onRoom()), never at race start — it should never
+// interrupt a race already in progress.
 function closeGearInfo() {
   gearInfoOpen = false;
   $('gear-info').hidden = true;
@@ -265,6 +270,7 @@ function bindNet(n) {
 
 function onRoom(m) {
   room = m;
+  maybeShowGearInfo(); // the instant gear mode is seen on, in the lobby — see its own comment
   if (race) {
     race.setPlayers(m.players);
     if (m.phase === 'lobby') { stopRace(); show('lobby'); renderLobby(); } // host sent everyone back
@@ -287,6 +293,7 @@ async function onGo(m) {
   show('race');
   hud.gear.root.hidden = !m.gearMode;
   hud.tire.root.hidden = !m.tireWear;
+  $('hud-help').textContent = HUD_HELP_BASE + (m.gearMode ? HUD_HELP_GEAR : '');
   race = new RaceView({
     renderer: renderer3d, hud, net, track, laps: m.laps, startAt: m.startAt, grid: m.grid, meId, players: room.players,
     debug: debugHud, gearMode: m.gearMode, collisions: m.collisions, tireWear: m.tireWear, ghost: m.ghost ?? null,
@@ -305,7 +312,6 @@ async function onGo(m) {
     },
   });
   race.start();
-  if (m.gearMode) maybeShowGearInfo();
 }
 
 function onDnf(m) {
